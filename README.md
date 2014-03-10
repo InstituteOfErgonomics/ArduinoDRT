@@ -3,7 +3,7 @@ ArduinoDRT
 
 Arduino Detection Response Task
 
-for more information and hardware description please visit http://www.lfe.mw.tum.de/en/arduinodrt
+for more information and hardware description please visit http://www.lfe.mw.tum.de/en/arduino-drt
 
 ----------
 

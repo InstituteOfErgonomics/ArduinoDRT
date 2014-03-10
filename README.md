@@ -16,11 +16,11 @@ The DRTs are currently in a standardization process (ISO), the values presented 
 
 ----------
 
-First we introduce the Plain-Arduino-DRT on an Arduino Uno. It just do a DRT experimental protocol and saves the results on a SD card. The experiment can be controlled via serial commands (like start/stop) or manually with a start/stop button and the results can also be transmitted via USB/COM.
+First we introduce the *Plain-Arduino-DRT* on an Arduino Uno. It just do a DRT experimental protocol and saves the results on a SD card. The experiment can be controlled via serial commands (like start/stop) or manually with a start/stop button and the results can also be transmitted via USB/COM.
 
-Than we expand this to the Ethernet-Arduino-DRT with an Arduino Uno and an Ethernet shield. It does the same, controlled via Ethernet and can also transmits its results via the network. Therefor, it can be connected, e.g. to a driving simulator.
+Than we expand this to the *Ethernet-Arduino-DRT* with an Arduino Uno and an Ethernet shield. It does the same, controlled via Ethernet and can also transmits its results via the network. Therefor, it can be connected, e.g. to a driving simulator.
 
-At last we expand the Ethernet-Arduino-DRT to the Mega-Arduino-DRT on an Arduino Mega and an Ethernet shield. Thus, we have more storage for program code and more hardware pins for connections. These freedom is used in an example to implement a setup with up to eight stimulus LEDs. Additionally we include a real time clock, DHCP and NTP functions.
+At last we expand the Ethernet-Arduino-DRT to the *Mega-Arduino-DRT* on an Arduino Mega and an Ethernet shield. Thus, we have more storage for program code and more hardware pins for connections. These freedom is used in an example to implement a setup with up to eight stimulus LEDs. Additionally we include a real time clock, DHCP and NTP functions.
 
 ----------
 

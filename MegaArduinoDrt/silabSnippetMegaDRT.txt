@@ -1,0 +1,63 @@
+#maybe it can help you to connect the DRT to your SILAB driving simulation
+
+	DPUSocket myArduinoDRT
+	{
+		Computer = { ASS };
+		Index = 100;  
+
+		#BigEndian [true/false]
+		BigEndian = true;
+
+		#Socket_IsTCPIP  TCP/IP [=true] or UDP [=false]
+		Socket_IsTCPIP = true;
+
+		Socket_IP = "192.168.2.107";
+	
+		Socket_IsServer = false;
+
+		Socket_PortSend = 7008;
+		Socket_PortReceive = 7009;		
+
+		#SendDefinition packet definition
+		SendDefinition = (
+			(remoteControl,ubyte)
+
+		);
+
+		#ReceiveDefinition packet definition
+		ReceiveDefinition = (
+
+ 			(count, uword),     #stimuli/packet count
+  			(stimulusT, ulong), #stimulus showen microsec (us) after start of experiment
+  			(onsetDelay,ulong), #error in us of onset compared to schedule
+  			(soa,ulong),        #random stimulus onset asynchrony in us; actual
+  			(soaNext,ulong),    #random stimulus onset asynchrony in us between actual and next
+  			(rt,ulong),         #reaction time in us; in case of miss, rt is set to 0
+  			(result,byte),      #'H' hit, 'M' miss or 'C' cheat. status message 'R' ready to start, 'N' SDcard  not available,'R' ready, 'E' error while loggin to SDcard, '#' experiment startet echo back, '$' experiment stopped echo back
+			(marker,byte),      #what marker is currently used on the device
+  			(edges,uword),      #edge count to detect hardware malfunctions; before debounce
+  			(edgesDebounced,uword), #edge count to detect hardware malfunctions; after debounce
+  			(hold,ulong),        #button hold time at previous stimuli
+			(buttonDownCount,uword), #how often the button was pressed down during this experiment
+			(fileNumber,uword),     #how often the button was pressed down during this experiment
+			(stimulusStrength,ubyte), #PWM strength
+			(unixTimestamp,ulong), #stimulus onset in seconds since 1.1.1970
+			(stimulusMultiX, ubyte),#on which LED the stimulus is shown
+			(nextStimulusMultiX, ubyte)#on which LED the next stimulus will be shown
+		);
+
+
+	};
+	Connections =
+	{
+
+		myKeyboard.Key <-> myArduinoDRT.remoteControl #keyboard can start/stop and controll the experiment
+
+	};
+#--------------------------------------------------------------
+
+	DPUKeyboard myKeyboard
+	{
+		Computer = { OPERATOR };
+		Index = 100; 
+	};	 

@@ -3,6 +3,7 @@
 //------------------------------------------------------
 //Version  Date		Author		  Mod
 //1        Mar, 2014	Michael Krause	  initial
+//1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
 //
 //------------------------------------------------------
 /*
@@ -51,7 +52,7 @@ const int DUO_COLOR_LED_RED = 2;
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;";
 
-const String VERSION = "V1-e";//with 'e'thernet. version number is logged to result header
+const String VERSION = "V1.1-e";//with 'e'thernet. version number is logged to result header
 
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
@@ -87,7 +88,7 @@ const byte STIMULUS_PWM_EEPROM = 2;//location in EEPROM to save pwm stimulus sig
   // Enter a MAC address for your controller below.
   // Newer Ethernet shields have a MAC address printed on a sticker on the shield
   byte gMac[] = {0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
-  IPAddress gIp(192,168,1,102);
+  IPAddress gIp(10,152,238,77);
   // the router's gateway address:
   //byte gGateway[] = { 192, 168, 2, 1 };
   // the subnet:
@@ -272,6 +273,9 @@ void incCurFileNumber(){
   gCurFileNumber = lowB + (highB << 8);
 
   gCurFileNumber++;
+  
+  gRootNumberOfFiles++;//important so we can assure that we not over the limit of file count of max fiels in root
+
   
   //save to eeprom
   EEPROM.write(0,  lowByte(gCurFileNumber)); 
@@ -502,9 +506,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
   char fileName[16];//actual file for saving
   sprintf(fileName, "%08d.txt", gCurFileNumber);
   file = SD.open(fileName, FILE_WRITE);
-  
-  gRootNumberOfFiles++;//important so we can assure that we not over the limit of file count of max fiels in root
-  
+    
   //Serial.println(actFileName);
   // if the file opened okay, write to it:
   if (file) {

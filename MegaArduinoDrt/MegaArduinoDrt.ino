@@ -3,6 +3,7 @@
 //------------------------------------------------------
 //Version  Date		Author		  Mod
 //1        Mar, 2014	Michael Krause	  initial
+//1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
 //
 //------------------------------------------------------
 /*     
@@ -73,7 +74,7 @@ const int DUO_COLOR_LED_RED = 2;
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;unixTimestamp;stimulusMultiX;nextStimulusMultiX;";
 
-const String VERSION = "V1-m";//with 'm'ega. version number is logged to result header
+const String VERSION = "V1.1-m";//with 'm'ega. version number is logged to result header
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
 const unsigned long MISS = 2500000;//greater 2500000 micro seconds = miss
@@ -433,7 +434,9 @@ void incCurFileNumber(){
   gCurFileNumber = lowB + (highB << 8);
 
   gCurFileNumber++;
-  
+ 
+  gRootNumberOfFiles++;//important so we can assure that we not over the limit of file count of max fiels in root
+ 
   //save to eeprom
   EEPROM.write(0,  lowByte(gCurFileNumber)); 
   EEPROM.write(1, highByte(gCurFileNumber));
@@ -686,9 +689,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
   char fileName[16];//actual file for saving
   sprintf(fileName, "%08d.txt", gCurFileNumber);
   file = SD.open(fileName, FILE_WRITE);
-  
-  gRootNumberOfFiles++;//important so we can assure that we not over the limit of file count of max fiels in root
-  
+    
   //Serial.println(actFileName);
   // if the file opened okay, write to it:
   if (file) {

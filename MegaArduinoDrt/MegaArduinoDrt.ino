@@ -4,6 +4,7 @@
 //Version  Date		Author		  Mod
 //1        Mar, 2014	Michael Krause	  initial
 //1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
+//1.2      July, 2014   Michael Krause    meanRt and hitRate
 //
 //------------------------------------------------------
 /*     
@@ -74,7 +75,7 @@ const int DUO_COLOR_LED_RED = 2;
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;unixTimestamp;stimulusMultiX;nextStimulusMultiX;";
 
-const String VERSION = "V1.1-m";//with 'm'ega. version number is logged to result header
+const String VERSION = "V1.2-m";//with 'm'ega. version number is logged to result header
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
 const unsigned long MISS = 2500000;//greater 2500000 micro seconds = miss
@@ -103,12 +104,12 @@ byte gReadablePacketSendF=false;//true: sendPacket will transmit readable format
 byte gStimulsOnF = false;//is stimuls on
 byte gStimulusStrength=255;//PWM stimulus strength
 const byte STIMULUS_PWM_EEPROM = 2;//location in EEPROM to save pwm stimulus signal strength
-
+unsigned long gRtSum=0;//sum of all reaction times during one experiment, to calculate meanRt
 
   // Enter a MAC address for your controller below.
   // Newer Ethernet shields have a MAC address printed on a sticker on the shield
   byte gMac[] = {0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
-  IPAddress gIp(192,168,2,2);
+  IPAddress gIp(192,168,1,111);
   // the router's gateway address:
   //byte gGateway[] = { 192, 168, 2, 1 };
   // the subnet:
@@ -137,6 +138,11 @@ typedef struct myDrtPacket{
   unsigned long soaNext;//random stimulus onset asynchrony in us between current and next
   unsigned long rt;// reaction time in us; in case of miss, rt is set to 0
   byte result; //'H' hit, 'M' miss or 'C' cheat. status message 'R' ready to start, '$' experiment started, '#' experimentz stopped, 'N' no sd card, 'E' error while logging
+  unsigned long meanRt;// mean rt in this experiement, up to now
+  unsigned long hitCount;//count hits in this experiment
+  unsigned long missCount;//count miss in this experiment
+  unsigned long cheatCount;//count cheat in this experiment
+  byte hitRate;//hit rate in this experiment, up to now (0-100)
   byte marker; //received marker '0' to '9'
   unsigned int edges; //edge count to detect hardware malfunctions;
   unsigned int edgesDebounced; //edge count to detect hardware malfunctions; edges after debounce
@@ -559,8 +565,8 @@ void loop() {
     static unsigned long last;
     if ((now - last) > 1000){ //if expriment not running, send every second a "R" ready packet
       last = now;
-        unsigned int temp1 = gPacket.edges;//we save edges over the packet reset
-        unsigned int temp2 = gPacket.edgesDebounced;//we save edgesDebounced over the packet reset
+        unsigned int temp1 = gPacket.edges;//we save edges over the packet reset, so we can see remotely if the button works
+        unsigned int temp2 = gPacket.edgesDebounced;//we save edgesDebounced over the packet reset, so we can see remotely if the button works
         //reset packet 
         memset((byte*)gpPacket,0, sizeof(sDrtPacket));
         gPacket.result = 'R'; // 'R' Ready to start
@@ -777,6 +783,8 @@ unsigned long setStimulus(byte value){
 void startExp(){
 
     gExpRunningF = true;
+    
+    gRtSum=0; //reset sum
       
     incCurFileNumber(); //set global file number to a new value
 
@@ -857,6 +865,7 @@ void handleDRT(){
       gCalculateHoldF = false;
       gPacket.rt = 0;
       gPacket.result = 'M';//miss
+      gPacket.missCount++;
       logging();
       gResponseWindowF = false;  
     } 
@@ -871,8 +880,11 @@ void handleDRT(){
         gPacket.rt = gButtonDownT - gExpStartT- gPacket.stimulusT;//gButtonDownT is in uptime micros so it is converted to 'experiment time' by subtract gExpStartT
         if (gPacket.rt < CHEAT){
           gPacket.result = 'C';//cheat
+          gPacket.cheatCount++;
         }else{
           gPacket.result = 'H'; //hit
+          gPacket.hitCount++;
+          gRtSum += gPacket.rt;//add to sum          
         }  
         logging();
         gResponseWindowF = false;  
@@ -894,6 +906,10 @@ void handleDRT(){
 }
 //-------------------------------------------------------------------------------------
 void logging(){
+  
+  //calculate some values
+  gPacket.meanRt = gRtSum / gPacket.hitCount;
+  gPacket.hitRate = (gPacket.hitCount * 100) / (gPacket.hitCount + gPacket.missCount);
     
   sendPacket();//send packet, first send packet so SD writing wont delay further
   writeData();//write data to SDcard
@@ -927,6 +943,16 @@ void sendPacket(){
       gServer.print(gPacket.rt);
       gServer.print(";rslt:");
       gServer.print(char(gPacket.result));
+      gServer.print(";meanRt:");
+      gServer.print(gPacket.meanRt);
+      gServer.print(";hitCount:");
+      gServer.print(gPacket.hitCount);
+      gServer.print(";missCount:");
+      gServer.print(gPacket.missCount);
+      gServer.print(";cheatCount:");
+      gServer.print(gPacket.cheatCount);
+      gServer.print(";hitRate:");
+      gServer.print(gPacket.hitRate);      
       gServer.print(";marker:");
       gServer.print(char(gPacket.marker));
       gServer.print(";edges:");
@@ -966,6 +992,16 @@ void sendPacket(){
     Serial.print(gPacket.rt);
     Serial.print(";rslt:");
     Serial.print(char(gPacket.result));
+    Serial.print(";meanRt:");
+    Serial.print(gPacket.meanRt);
+    Serial.print(";hitCount:");
+    Serial.print(gPacket.hitCount);
+    Serial.print(";missCount:");
+    Serial.print(gPacket.missCount);
+    Serial.print(";cheatCount:");
+    Serial.print(gPacket.cheatCount);
+    Serial.print(";hitRate:");
+    Serial.print(gPacket.hitRate);    
     Serial.print(";marker:");
     Serial.print(char(gPacket.marker));
     Serial.print(";edges:");

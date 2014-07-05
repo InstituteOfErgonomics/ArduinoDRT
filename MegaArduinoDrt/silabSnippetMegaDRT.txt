@@ -11,7 +11,7 @@
 		#Socket_IsTCPIP  TCP/IP [=true] or UDP [=false]
 		Socket_IsTCPIP = true;
 
-		Socket_IP = "192.168.2.107";
+		Socket_IP = "192.168.1.111";
 	
 		Socket_IsServer = false;
 
@@ -34,6 +34,11 @@
   			(soaNext,ulong),    #random stimulus onset asynchrony in us between actual and next
   			(rt,ulong),         #reaction time in us; in case of miss, rt is set to 0
   			(result,byte),      #'H' hit, 'M' miss or 'C' cheat. status message 'R' ready to start, 'N' SDcard  not available,'R' ready, 'E' error while loggin to SDcard, '#' experiment startet echo back, '$' experiment stopped echo back
+			(meanRt,ulong),      #mean rt in this experiement, up to now
+			(hitCount,ulong),    #count hits in this experiment
+			(missCount,ulong),   #count miss in this experiment
+			(cheatCount,ulong),  #count cheat in this experiment
+			(hitRate,byte),     #hit rate in this experiment, up to now (0-100)
 			(marker,byte),      #what marker is currently used on the device
   			(edges,uword),      #edge count to detect hardware malfunctions; before debounce
   			(edgesDebounced,uword), #edge count to detect hardware malfunctions; after debounce

@@ -455,7 +455,7 @@ void incCurFileNumber(){
      }
    }          
    if (gRootNumberOfFiles > 500){//hang forever limit of files in root folder is 512;
-     Serial.println("More than 500 files in rrot dir. Empty SD card");
+     Serial.println("More than 500 files in root dir. Empty SD card");
      while(1){
        //duoColorLed red blinking
        duoLedBlink(1, 250, DUO_COLOR_LED_RED);

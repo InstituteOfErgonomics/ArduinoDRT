@@ -5,6 +5,7 @@
 //1        Mar, 2014	Michael Krause	  initial
 //1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
 //1.2      July, 2014   Michael Krause    meanRt and hitRate
+//1.2.1    Aug, 2014    Michael Krause    added error msg
 //
 //------------------------------------------------------
 /*
@@ -53,7 +54,7 @@ const int DUO_COLOR_LED_RED = 2;
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;";
 
-const String VERSION = "V1.2-e";//with 'e'thernet. version number is logged to result header
+const String VERSION = "V1.2.1-e";//with 'e'thernet. version number is logged to result header
 
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
@@ -287,12 +288,14 @@ void incCurFileNumber(){
   EEPROM.write(1, highByte(gCurFileNumber));
 
    if (gCurFileNumber > 65000){//hang forever limit of unsigned int is 65535
+     Serial.println("CurFileNumber > 65000. Reset EEPROM.");
      while(1){
        //duoColorLed red blinking slow
        duoLedBlink(1, 1000, DUO_COLOR_LED_RED);
      }
    }          
    if (gRootNumberOfFiles > 500){//hang forever limit of files in root folder is 512;
+     Serial.println("More than 500 files in root dir. Empty SD card");
      while(1){
        //duoColorLed red blinking
        duoLedBlink(1, 250, DUO_COLOR_LED_RED);
@@ -366,7 +369,7 @@ void loop() {
       EEPROM.write(STIMULUS_PWM_EEPROM, --gStimulusStrength); //decrease PWM strength and save. 0 is not possible because it is converted to 255 in setup
       if (gStimulsOnF) setStimulus(gStimulusStrength);;//if stimulus is on, refresh it with new value
     }
-    if ((inByte == 't') && (!gExpRunningF)) {//switch stimuls on/off for 't'esting
+    if ((inByte == 't') && (!gExpRunningF)) {//switch stimuls on/off for 't'esting or 't'oggle
       gStimulsOnF = !gStimulsOnF; //toggle
       if (gStimulsOnF) setStimulus(gStimulusStrength);
       else digitalWrite(STIMULUS_LED_PIN,LOW);

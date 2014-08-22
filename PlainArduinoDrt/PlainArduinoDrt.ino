@@ -4,7 +4,7 @@
 //Version  Date		Author		  Mod
 //1        Mar, 2014	Michael Krause	  initial
 //1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
-//
+//1.2      Aug, 2014    Michael Krause    meanRt and hitRate
 //------------------------------------------------------
 /*
   GPL due to the use of SD libs.
@@ -50,7 +50,7 @@ const int DUO_COLOR_LED_GREEN = 1;
 const int DUO_COLOR_LED_RED = 2; 
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;buttonDownCount;pwm;";
-const String VERSION = "V1.1-plain";//plain, without Ethernet. version number is logged to result header
+const String VERSION = "V1.2-plain";//plain, without Ethernet. version number is logged to result header
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
 const unsigned long MISS = 2500000;//greater 2500000 micro seconds = miss
@@ -78,6 +78,8 @@ byte gReadablePacketSendF=false;//true: sendPacket will transmit readable format
 byte gStimulsOnF = false;//is stimuls on
 byte gStimulusStrength=255;//PWM stimulus strength
 const byte STIMULUS_PWM_EEPROM = 2;//location in EEPROM to save pwm stimulus signal strength
+unsigned long gRtSum=0;//sum of all reaction times during one experiment, to calculate meanRt
+
 //----------
 #pragma pack(1)
 typedef struct myDrtPacket{
@@ -88,6 +90,11 @@ typedef struct myDrtPacket{
   unsigned long soaNext;//random stimulus onset asynchrony in us between current and next
   unsigned long rt;// reaction time in us; in case of miss, rt is set to 0
   byte result; //'H' hit, 'M' miss or 'C' cheat. status message 'R' ready to start, '$' experiment started, '#' experimentz stopped, 'N' no sd card, 'E' error while logging
+  unsigned long meanRt;// mean rt in this experiement, up to now
+  unsigned long hitCount;//count hits in this experiment 
+  unsigned long missCount;//count miss in this experiment 
+  unsigned long cheatCount;//count cheat in this experiment  
+  byte hitRate;//hit rate in this experiment, up to now (0-100) 
   byte marker; //received marker '0' to '9'
   unsigned int edges; //edge count to detect hardware malfunctions;
   unsigned int edgesDebounced; //edge count to detect hardware malfunctions; edges after debounce
@@ -257,7 +264,7 @@ void incCurFileNumber(){
      }
    }          
    if (gRootNumberOfFiles > 500){//hang forever limit of files in root folder is 512;
-     Serial.println("More than 500 files in rrot dir. Empty SD card");
+     Serial.println("More than 500 files in root dir. Empty SD card");
      while(1){
        //duoColorLed red blinking
        duoLed(DUO_COLOR_LED_RED);
@@ -533,7 +540,9 @@ unsigned long setStimulus(byte value){
 void startExp(){
 
     gExpRunningF = true;
-      
+
+    gRtSum=0; //reset sum
+            
     incCurFileNumber(); //set global file number to a new value
 
     writeHeader();
@@ -596,6 +605,7 @@ void handleDRT(){
       gCalculateHoldF = false;
       gPacket.rt = 0;
       gPacket.result = 'M';//miss
+      gPacket.missCount++;      
       logging();
       gResponseWindowF = false;  
     } 
@@ -610,8 +620,11 @@ void handleDRT(){
         gPacket.rt = gButtonDownT - gExpStartT- gPacket.stimulusT;//gButtonDownT is in uptime micros so it is converted to 'experiment time' by subtract gExpStartT
         if (gPacket.rt < CHEAT){
           gPacket.result = 'C';//cheat
+          gPacket.cheatCount++;          
         }else{
           gPacket.result = 'H'; //hit
+          gPacket.hitCount++;
+          gRtSum += gPacket.rt;//add to sum          
         }  
         logging();
         gResponseWindowF = false;  
@@ -633,6 +646,9 @@ void handleDRT(){
 }
 //-------------------------------------------------------------------------------------
 void logging(){
+    //calculate some values
+  gPacket.meanRt = gRtSum / gPacket.hitCount;
+  gPacket.hitRate = (gPacket.hitCount * 100) / (gPacket.hitCount + gPacket.missCount);
     
   sendPacket();//send packet, first send packet so SD writing wont delay further
   writeData();//write data to SDcard
@@ -664,6 +680,16 @@ void sendPacket(){
     Serial.print(gPacket.rt);
     Serial.print(";result:");
     Serial.print(char(gPacket.result));
+    Serial.print(";meanRt:");
+    Serial.print(gPacket.meanRt);
+    Serial.print(";hitCount:");
+    Serial.print(gPacket.hitCount);
+    Serial.print(";missCount:");
+    Serial.print(gPacket.missCount);
+    Serial.print(";cheatCount:");
+    Serial.print(gPacket.cheatCount);
+    Serial.print(";hitRate:");
+    Serial.print(gPacket.hitRate);    
     Serial.print(";marker:");
     Serial.print(char(gPacket.marker));
     Serial.print(";edges:");

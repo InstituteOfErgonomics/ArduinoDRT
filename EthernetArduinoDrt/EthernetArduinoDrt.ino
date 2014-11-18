@@ -6,6 +6,7 @@
 //1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
 //1.2      July, 2014   Michael Krause    meanRt and hitRate
 //1.2.1    Aug, 2014    Michael Krause    added error msg
+//1.3      Nov, 2014    Michael Krause    shortened error messages, this removes non logging on SDcard bug. Important note: SRAM (string const, etc) was full, 1.2.1 sketch was compiled without error but failed during operation 
 //
 //------------------------------------------------------
 /*
@@ -54,7 +55,7 @@ const int DUO_COLOR_LED_RED = 2;
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;";
 
-const String VERSION = "V1.2.1-e";//with 'e'thernet. version number is logged to result header
+const String VERSION = "V1.3-e";//with 'e'thernet. version number is logged to result header
 
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
@@ -89,7 +90,7 @@ unsigned long gRtSum=0;//sum of all reaction times during one experiment, to cal
   // Enter a MAC address for your controller below.
   // Newer Ethernet shields have a MAC address printed on a sticker on the shield
   byte gMac[] = {0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
-  IPAddress gIp(192,168,1,111);
+  IPAddress gIp(192,168,1,15);
   // the router's gateway address:
   //byte gGateway[] = { 192, 168, 2, 1 };
   // the subnet:
@@ -218,8 +219,12 @@ void setup() {
   
   modEpromNumber();//fileNumber for logging is set to next hundred on power up
   
-  if (gSdCardAvailableF) duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
-
+  if (gSdCardAvailableF){
+    duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
+  }
+  else{
+    //while(1); //hang forever if you dont want that someone can start without a SD card
+  }  
   //load PWM signalStrength from EEPROM 
   gStimulusStrength = EEPROM.read(STIMULUS_PWM_EEPROM);
   if (gStimulusStrength == 0){//if 0 set to 255, 0 is likely due to first use or clear of EEPROM
@@ -288,14 +293,14 @@ void incCurFileNumber(){
   EEPROM.write(1, highByte(gCurFileNumber));
 
    if (gCurFileNumber > 65000){//hang forever limit of unsigned int is 65535
-     Serial.println("CurFileNumber > 65000. Reset EEPROM.");
+     Serial.println("E65000. Reset EEPROM.");
      while(1){
        //duoColorLed red blinking slow
        duoLedBlink(1, 1000, DUO_COLOR_LED_RED);
      }
    }          
    if (gRootNumberOfFiles > 500){//hang forever limit of files in root folder is 512;
-     Serial.println("More than 500 files in root dir. Empty SD card");
+     Serial.println("E500. Empty SD card");
      while(1){
        //duoColorLed red blinking
        duoLedBlink(1, 250, DUO_COLOR_LED_RED);
@@ -560,7 +565,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
       duoLed(DUO_COLOR_LED_RED);
       gPacket.result = 'E'; // 'E' error while logging
       sendPacket();//send packet
-     
+      while(1);//hang forever, we dont continue whithout sd card logging, if sd card was originaly present on start up     
   }
 } 
 //-------------------------------------------------------------------------------------

@@ -5,6 +5,7 @@
 //1        Mar, 2014	Michael Krause	  initial
 //1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
 //1.2      Aug, 2014    Michael Krause    meanRt and hitRate
+//1.3      Nov, 2014    Michael Krause    shortened error messages, this removes non logging on SDcard bug. Important note: SRAM (string const, etc) was full, 1.2.1 sketch was compiled without error but failed during operation 
 //------------------------------------------------------
 /*
   GPL due to the use of SD libs.
@@ -50,7 +51,7 @@ const int DUO_COLOR_LED_GREEN = 1;
 const int DUO_COLOR_LED_RED = 2; 
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;buttonDownCount;pwm;";
-const String VERSION = "V1.2-plain";//plain, without Ethernet. version number is logged to result header
+const String VERSION = "V1.3-plain";//plain, without Ethernet. version number is logged to result header
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
 const unsigned long MISS = 2500000;//greater 2500000 micro seconds = miss
@@ -185,7 +186,12 @@ void setup() {
   
   modEpromNumber();//fileNumber for logging is set to next hundred on power up
   
-  if (gSdCardAvailableF) duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
+  if (gSdCardAvailableF){
+    duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
+  }
+  else{
+    //while(1); //hang forever if you dont want that someone can start without a SD card
+  } 
   
   //load PWM signalStrength from EEPROM 
   gStimulusStrength = EEPROM.read(STIMULUS_PWM_EEPROM);
@@ -254,7 +260,7 @@ void incCurFileNumber(){
   EEPROM.write(1, highByte(gCurFileNumber));
 
    if (gCurFileNumber > 65000){//hang forever limit of unsigned int is 65535
-     Serial.println("CurFileNumber > 65000. Reset EEPROM.");
+     Serial.println("E65000. Reset EEPROM.");
      while(1){
        //duoColorLed red blinking slow
        duoLed(DUO_COLOR_LED_RED);
@@ -264,7 +270,7 @@ void incCurFileNumber(){
      }
    }          
    if (gRootNumberOfFiles > 500){//hang forever limit of files in root folder is 512;
-     Serial.println("More than 500 files in root dir. Empty SD card");
+     Serial.println("E500. Empty SD card");
      while(1){
        //duoColorLed red blinking
        duoLed(DUO_COLOR_LED_RED);
@@ -508,7 +514,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
       duoLed(DUO_COLOR_LED_RED);
       gPacket.result = 'E'; // 'E' error while logging
       sendPacket();//send packet
-     
+      while(1);//hang forever, we dont continue whithout sd card logging, if sd card was originaly present on start up     
   }
 } 
 //-------------------------------------------------------------------------------------

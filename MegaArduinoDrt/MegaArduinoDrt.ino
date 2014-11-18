@@ -5,6 +5,7 @@
 //1        Mar, 2014	Michael Krause	  initial
 //1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
 //1.2      July, 2014   Michael Krause    meanRt and hitRate
+//1.3      Nov,  2014   Michael Krause    some changes to make mega-drt in line with plain-drt and ethernet-drt
 //
 //------------------------------------------------------
 /*     
@@ -75,7 +76,7 @@ const int DUO_COLOR_LED_RED = 2;
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;unixTimestamp;stimulusMultiX;nextStimulusMultiX;";
 
-const String VERSION = "V1.2-m";//with 'm'ega. version number is logged to result header
+const String VERSION = "V1.3-m";//with 'm'ega. version number is logged to result header
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
 const unsigned long MISS = 2500000;//greater 2500000 micro seconds = miss
@@ -301,8 +302,13 @@ void setup() {
   
   modEpromNumber();//fileNumber for logging is set to next hundred on power up
   
-  if (gSdCardAvailableF) duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
-
+  if (gSdCardAvailableF){
+    duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
+  }
+  else{
+    //while(1); //hang forever if you dont want that someone can start without a SD card
+  }  
+  
   //load PWM signalStrength from EEPROM 
   gStimulusStrength = EEPROM.read(STIMULUS_PWM_EEPROM);
   if (gStimulusStrength == 0){//if 0 set to 255, 0 is likely due to first use or clear of EEPROM
@@ -747,7 +753,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
       duoLed(DUO_COLOR_LED_RED);
       gPacket.result = 'E'; // 'E' error while logging
       sendPacket();//send packet
-     
+      while(1);//hang forever, we dont continue whithout sd card logging, if sd card was originaly present on start up  
   }
 } 
 //-------------------------------------------------------------------------------------

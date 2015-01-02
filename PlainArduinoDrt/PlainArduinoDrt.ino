@@ -6,6 +6,7 @@
 //1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
 //1.2      Aug, 2014    Michael Krause    meanRt and hitRate
 //1.3      Nov, 2014    Michael Krause    shortened error messages, this removes non logging on SDcard bug. Important note: SRAM (string const, etc) was full, 1.2.1 sketch was compiled without error but failed during operation 
+//2.0      Jan, 2015    Michael Krause    part. refactored (const EEPROM and handleCommand()) & added measurement() for piezo & improved ISR
 //------------------------------------------------------
 /*
   GPL due to the use of SD libs.
@@ -46,18 +47,27 @@ const int SD_CARD_LED_PIN_L = 7;//duoColorLED for SD-card status low pin
 const int SD_CARD_LED_PIN_H = 8;//duoColorLED for SD-card status high pin
 const int STIMULUS_LED_PIN = 9; // stimulus led / tactile tactor
 
+const int PIEZO = 0;//piezo connected to analog0
+const int ERR = -1;//error in piezo measurement
+
 const int DUO_COLOR_LED_OFF = 0; 
 const int DUO_COLOR_LED_GREEN = 1; 
 const int DUO_COLOR_LED_RED = 2; 
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;buttonDownCount;pwm;";
-const String VERSION = "V1.3-plain";//plain, without Ethernet. version number is logged to result header
+const String VERSION = "V2.0-plain";//plain, without Ethernet. version number is logged to result header
+const String LINE = "----------";
+const String SEP = ";";
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
 const unsigned long MISS = 2500000;//greater 2500000 micro seconds = miss
 
 const unsigned long STIM_MIN = 3000000;//next stimulus min after x micro seconds
 const unsigned long STIM_MAX = 5000000;//next stimulus max after x micro seconds
+
+const byte EEPROM_FILENUM_L = 0x00;//location in EEPROM to file number low byte
+const byte EEPROM_FILENUM_H = 0x01;//location in EEPROM to file number high byte
+const byte EEPROM_STIMULUS_PWM = 0x02;//location in EEPROM to save pwm stimulus signal strength
 
 const byte MARKER_DEFAULT = '-';
 
@@ -78,8 +88,8 @@ byte gMarker = MARKER_DEFAULT;//if we get a marker/trigger we set gMarker to thi
 byte gReadablePacketSendF=false;//true: sendPacket will transmit readable format. false: binary format
 byte gStimulsOnF = false;//is stimuls on
 byte gStimulusStrength=255;//PWM stimulus strength
-const byte STIMULUS_PWM_EEPROM = 2;//location in EEPROM to save pwm stimulus signal strength
 unsigned long gRtSum=0;//sum of all reaction times during one experiment, to calculate meanRt
+int gButtonState;//button state of reaction button
 
 //----------
 #pragma pack(1)
@@ -138,6 +148,36 @@ void duoLed(int state){
   
 }
 //---------------------------------------------------------------------------
+//helper
+void duoLedBlink(int howOften, int halfcycle, int color){
+       for(int i=0;i <howOften;i++){
+         duoLed(color);
+         delay(halfcycle);
+         duoLed(DUO_COLOR_LED_OFF);
+         delay(halfcycle);
+       }  
+}
+//---------------------------------------------------------------------------
+void sdInit(){
+   //---SD-init-------------------------------------- 
+   //Serial.print("Initializing SD card...");
+  if (!SD.begin(SD_CARD_CS_PIN)) {
+        Serial.println("SD init failed");
+        //reset packet 
+        memset((byte*)gpPacket,0, sizeof(sDrtPacket));
+        gPacket.result = 'N'; // 'N' SD not available
+        sendPacket();//send packet
+        gSdCardAvailableF = false;
+        //blink two times red
+        duoLedBlink(2, 250, DUO_COLOR_LED_RED);
+  }else{
+    //Serial.println("initialization done.");
+        gSdCardAvailableF = true;
+    
+       //duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green
+  }  
+}
+//---------------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);  
   pinMode(REACT_BUTTON_PIN, INPUT); 
@@ -150,6 +190,10 @@ void setup() {
 
   pinMode(SD_CARD_CS_PIN, OUTPUT);
 
+
+  //init gButtonState global var
+  gButtonState = digitalRead(REACT_BUTTON_PIN);
+  
   digitalWrite(REACT_BUTTON_PIN, HIGH); // pullUp on  
   attachInterrupt(0, buttonISR, CHANGE);
 
@@ -157,31 +201,9 @@ void setup() {
 
   //reset packet 
   memset((byte*)gpPacket,0, sizeof(sDrtPacket));
+
+  sdInit();
   
-  //---SD------- 
-   //Serial.print("Initializing SD card...");
-  if (!SD.begin(SD_CARD_CS_PIN)) {
-        Serial.println("SD initialization failed!");
-        //reset packet 
-        memset((byte*)gpPacket,0, sizeof(sDrtPacket));
-        gPacket.result = 'N'; // 'N' SD not available
-        sendPacket();//send packet
-        gSdCardAvailableF = false;
-        //blink two times red
-        duoLed(DUO_COLOR_LED_RED);//duoColorLed red
-        delay(250);      
-        duoLed(DUO_COLOR_LED_OFF);//duoColorLed off
-        delay(250);      
-        duoLed(DUO_COLOR_LED_RED);//duoColorLed red
-        delay(250);      
-        duoLed(DUO_COLOR_LED_OFF);//duoColorLed off
-        delay(250);      
-  }else{
-    //Serial.println("initialization done.");
-        gSdCardAvailableF = true;
-    
-       //duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green
-  }
   gRootNumberOfFiles = getRootNumberOfFiles();//we need this later to assure that we are not over the limit of 512; to seek the directory before every experiment need to much time
   
   modEpromNumber();//fileNumber for logging is set to next hundred on power up
@@ -192,13 +214,16 @@ void setup() {
   else{
     //while(1); //hang forever if you dont want that someone can start without a SD card
   } 
-  
+
   //load PWM signalStrength from EEPROM 
-  gStimulusStrength = EEPROM.read(STIMULUS_PWM_EEPROM);
+  gStimulusStrength = EEPROM.read(EEPROM_STIMULUS_PWM);
   if (gStimulusStrength == 0){//if 0 set to 255, 0 is likely due to first use or clear of EEPROM
     gStimulusStrength = 255;
-    EEPROM.write(STIMULUS_PWM_EEPROM, gStimulusStrength);
+    EEPROM.write(EEPROM_STIMULUS_PWM, gStimulusStrength);
   }
+  
+   //TCCR1B = TCCR1B & 0b11111000 | 0x01;//setting timer1 divisor to 1 => 31250Hz on Pin 9 & 10 for Arduino >>Uno<< so we can use TI DRV2603 & LRA  
+
 }
 //-------------------------------------------------------------------------------------
 int getRootNumberOfFiles(){
@@ -227,8 +252,8 @@ int getRootNumberOfFiles(){
 void modEpromNumber(){//set the eprom to the next hundred number
 
   //load from eeprom
-  int lowB  = EEPROM.read(0);  
-  int highB = EEPROM.read(1);
+  int lowB  = EEPROM.read(EEPROM_FILENUM_L);  
+  int highB = EEPROM.read(EEPROM_FILENUM_H);
   unsigned int temp = lowB + (highB << 8);
 
  gPacket.fileNumber = temp;//transmit and save old filenumber
@@ -238,8 +263,8 @@ void modEpromNumber(){//set the eprom to the next hundred number
   }
   
   //save to eeprom
-  EEPROM.write(0,  lowByte(temp)); 
-  EEPROM.write(1, highByte(temp));
+  EEPROM.write(EEPROM_FILENUM_L,  lowByte(temp)); 
+  EEPROM.write(EEPROM_FILENUM_H, highByte(temp));
 }
 //-------------------------------------------------------------------------------------
 void incCurFileNumber(){
@@ -247,8 +272,8 @@ void incCurFileNumber(){
   if (!gSdCardAvailableF) return;
 
   //load from eeprom
-  int lowB  = EEPROM.read(0);  
-  int highB = EEPROM.read(1);
+  int lowB  = EEPROM.read(EEPROM_FILENUM_L);  
+  int highB = EEPROM.read(EEPROM_FILENUM_H);
   gCurFileNumber = lowB + (highB << 8);
 
   gCurFileNumber++;
@@ -256,35 +281,29 @@ void incCurFileNumber(){
   gRootNumberOfFiles++;//important so we can assure that we not over the limit of file count of max fiels in root
   
   //save to eeprom
-  EEPROM.write(0,  lowByte(gCurFileNumber)); 
-  EEPROM.write(1, highByte(gCurFileNumber));
+  EEPROM.write(EEPROM_FILENUM_L,  lowByte(gCurFileNumber)); 
+  EEPROM.write(EEPROM_FILENUM_H, highByte(gCurFileNumber));
 
    if (gCurFileNumber > 65000){//hang forever limit of unsigned int is 65535
      Serial.println("E65000. Reset EEPROM.");
      while(1){
        //duoColorLed red blinking slow
-       duoLed(DUO_COLOR_LED_RED);
-       delay(1000);
-       duoLed(DUO_COLOR_LED_OFF);
-       delay(1000);
+       duoLedBlink(1, 1000, DUO_COLOR_LED_RED);
      }
    }          
    if (gRootNumberOfFiles > 500){//hang forever limit of files in root folder is 512;
      Serial.println("E500. Empty SD card");
      while(1){
        //duoColorLed red blinking
-       duoLed(DUO_COLOR_LED_RED);
-       delay(250);
-       duoLed(DUO_COLOR_LED_OFF);
-       delay(250);
+       duoLedBlink(1, 250, DUO_COLOR_LED_RED);
      }
    } 
 }
 //-------------------------------------------------------------------------------------
 void handleStartStopButton() {//called in every loop
   
-  const unsigned int SSCOUNT_ACTION_AT = 500;
-  const unsigned int SSCOUNT_PRESSED_AND_HANDLED = 501;
+  const unsigned int SSCOUNT_ACTION_AT = 300;
+  const unsigned int SSCOUNT_PRESSED_AND_HANDLED = 301;
   
   static unsigned long ssDownOld; 
   static unsigned long ssCount; 
@@ -310,39 +329,108 @@ void handleStartStopButton() {//called in every loop
   }
 }
 //-------------------------------------------------------------------------------------
+void handleCommand(byte command){
+  
+  if(!gExpRunningF){//commands which are only handled when experiment is NOT running
+  
+      switch( command ){
+        
+    	case '#':
+    	case 32://space
+              startExp();//start experiment with '#' or 32 (=SPACE)
+              break;
+            /* 
+    	case '?':
+              sendCardDataLastFile();//send last logged data from card over serial  
+              break;
+    	case '*':
+              sendCardDataAllFiles();//send all card data over serial
+              break;
+            */
+     	case '+'://careful eeprom write cycles are limited!
+              setPWM(++gStimulusStrength);
+              break;       
+     	case '-'://careful eeprom write cycles are limited!
+             setPWM(--gStimulusStrength);
+             break;       
+  
+      	case 't'://toggle stimulus on/off
+            gStimulsOnF = !gStimulsOnF; //toggle
+            if (gStimulsOnF) setStimulus(gStimulusStrength);
+            else digitalWrite(STIMULUS_LED_PIN,LOW);
+          break; 
+          
+      	case 'm'://measurement via piezo
+          measurement();
+          break;
+
+/*       
+    //used during an experiment with different PWMs
+      	case 's'://measurement
+          gMarker = command;
+          setPWM(48);
+          break;
+         
+      	case 'd'://measurement
+          gMarker = command;
+          setPWM(73);
+          break;
+         
+      	case 'f'://measurement
+          gMarker = command;
+          setPWM(255);
+          break;
+         
+*/         
+         
+         default: 
+          break;
+   
+       }  
+    
+  }else{//commands which are only handled when experiment IS running
+  
+       switch( command )
+       {
+  	case '$':
+  	case 27://ESC
+            stopExp();//stop experiment with '$' or 27 (=ESC)
+            break;
+         default: 
+          break;
+       }  
+  
+  }
+  
+  //commands which are independant handled of experiment running/not running
+  if (command == 'b') gReadablePacketSendF = false;//binary send format
+  if (command == 'r') gReadablePacketSendF = true;//readable send format
+ 
+  if ((command >= 48) && (command <= 57)) gMarker = command;//set marker '0' to '9'
+  
+}
+//-------------------------------------------------------------------------------------
+void setPWM(byte pwm){
+  if (pwm > 0){
+    EEPROM.write(EEPROM_STIMULUS_PWM, pwm);//store in EEPROM
+    gStimulusStrength = pwm;//set global variable
+    if (gStimulsOnF) setStimulus(gStimulusStrength);//if stimulus is on, refresh it with new value
+  }
+}
+//-------------------------------------------------------------------------------------
 void loop() {
 
    //listen on serial line ------------------------------
   int inByte = 0; //reset in every loop
   if (Serial.available() > 0) inByte = Serial.read();//read in
   
-  if (((inByte == '#')||(inByte == 32)) && (!gExpRunningF)) startExp();//start experiment with '#' or 32 (=SPACE)
-  if (((inByte == '$')||(inByte == 27)) &&  (gExpRunningF)) stopExp();//stop experiment with '$' or 27 (=ESC)
-  if (inByte == 'b') gReadablePacketSendF = false;//binary send format
-  if (inByte == 'r') gReadablePacketSendF = true;//readable send format
-  //if ((inByte == '?') && (!gExpRunningF)) sendCardDataLastFile();//send last logged data from card over seriall  
-  //if ((inByte == '*') && (!gExpRunningF)) sendCardDataAllFiles();//send all card data over serial
-  if ((inByte >= 48) && (inByte <= 57)) gMarker = inByte;//set marker '0' to '9'
-  if ((inByte == '+') && (!gExpRunningF) &&  (gStimulusStrength < 255)) {
-    EEPROM.write(STIMULUS_PWM_EEPROM, ++gStimulusStrength);//increase PWM strength and save
-    if (gStimulsOnF) setStimulus(gStimulusStrength);//if stimulus is on, refresh it with new value
-  }
-  if ((inByte == '-') && (!gExpRunningF) &&  (gStimulusStrength > 1)){
-    EEPROM.write(STIMULUS_PWM_EEPROM, --gStimulusStrength); //decrease PWM strength and save. 0 is not possible because it is converted to 255 in setup
-    if (gStimulsOnF) setStimulus(gStimulusStrength);//if stimulus is on, refresh it with new value
-  }
-  if ((inByte == 't') && (!gExpRunningF)) {//switch stimuls on/off for 't'esting
-    gStimulsOnF = !gStimulsOnF; //toggle
-    if (gStimulsOnF) setStimulus(gStimulusStrength);
-    else digitalWrite(STIMULUS_LED_PIN,LOW);
-  }
-  //----------------------------------------------------
+  handleCommand(inByte);
 
   handleStartStopButton();
 
-//refresh buttonState LED
-  int buttonState = digitalRead(REACT_BUTTON_PIN);
-  digitalWrite(BUTTON_CLOSED_LED_PIN,!buttonState); 
+ //continiously refresh buttonState & LED
+  gButtonState = digitalRead(REACT_BUTTON_PIN);
+  digitalWrite(BUTTON_CLOSED_LED_PIN,!gButtonState); 
 
 
   if (gExpRunningF){
@@ -368,12 +456,12 @@ void loop() {
 /*
 void sendCardDataLastFile(){
   if (!gSdCardAvailableF){
-    Serial.println("SD card not initialised");
+    Serial.println("noSD");
     return;
   }
   
-  int lowB  = EEPROM.read(0);  
-  int highB = EEPROM.read(1);
+  int lowB  = EEPROM.read(EEPROM_FILENUM_L);  
+  int highB = EEPROM.read(EEPROM_FILENUM_H);
   int number = lowB + (highB << 8);
   File file;
   char fileName[16];
@@ -383,7 +471,7 @@ void sendCardDataLastFile(){
   }while(!SD.exists(fileName) && (number > -1));
   
   Serial.println("");
-  Serial.println("---------------------");
+  Serial.println(LINE);
   
     // open file for reading:
     file = SD.open(fileName);
@@ -396,13 +484,14 @@ void sendCardDataLastFile(){
       }
       file.close();
     } else {
-      Serial.print("error opening file: ");
+      Serial.print("err");      
+      //Serial.print("error opening file: ");
       Serial.println(fileName);
       //duoColorLed red 
       duoLed(DUO_COLOR_LED_RED); 
     }
     
-      Serial.println("---------------------"); 
+      Serial.println(LINE); 
 }
 */
 //-------------------------------------------------------------------------------------
@@ -411,16 +500,16 @@ void sendCardDataAllFiles(){
   File file;
   
   if (!gSdCardAvailableF){
-    Serial.println("SD card not initialised");
+    Serial.println("noSD");
     return;
   }
   
   Serial.println("");
-  Serial.println("---------------------");
+  Serial.println(LINE);
     
   char fileName[16];
-  int lowB  = EEPROM.read(0);  
-  int highB = EEPROM.read(1);
+  int lowB  = EEPROM.read(EEPROM_FILENUM_L);  
+  int highB = EEPROM.read(EEPROM_FILENUM_H);
   int number = lowB + (highB << 8);
 
   for (unsigned int i = 0; i<=number;i++){
@@ -440,7 +529,8 @@ void sendCardDataAllFiles(){
       }
       file.close();
     } else {
-      Serial.print("error opening file: ");
+      Serial.print("err");
+      //Serial.print("error opening file: ");
       Serial.println(fileName);
       //duoColorLed red 
        duoLed(DUO_COLOR_LED_RED);    
@@ -479,29 +569,29 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
       else{//write data
         //Serial.println("logging");  
         file.print(gPacket.count);
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.stimulusT);
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.onsetDelay);
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.soa);
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.soaNext);
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.rt);
-        file.print(";");
+        file.print(SEP);
         file.print(char(gPacket.result));
-        file.print(";");
+        file.print(SEP);
         file.print(char(gPacket.marker));
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.edges);
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.edgesDebounced);
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.hold);
-        file.print(";");
+        file.print(SEP);
         file.print(gPacket.buttonDownCount);
-        file.print(";");
+        file.print(SEP);
         file.println(gPacket.stimulusStrength);
       }  
   
@@ -551,7 +641,7 @@ void startExp(){
             
     incCurFileNumber(); //set global file number to a new value
 
-    writeHeader();
+    writeHeader();//write header to SD file
     
     digitalWrite(EXP_RUNNING_LED_PIN,HIGH);//led on
     
@@ -671,44 +761,63 @@ void sendPacket(){
    gPacket.marker = gMarker;//set marker in packet before send and write
 
   if(gReadablePacketSendF){  
-    //readable    
-    Serial.print("count;");
+    //readable  
+   //NOTE: this needs a lot of SRAM; if you dont need it comment it out, delete or just transmit what is interesting to you.  
+    Serial.print("cnt:");
     Serial.print(gPacket.count);
-    Serial.print(";stimulusT:");
+    Serial.print(SEP);
+    Serial.print("stimuT:");
     Serial.print(gPacket.stimulusT);
-    Serial.print(";onsetDelay:");
+    Serial.print(SEP);
+    Serial.print("onsetDelay:");
     Serial.print(gPacket.onsetDelay);
-    Serial.print(";soa:");
+    Serial.print(SEP);
+    Serial.print("soa:");
     Serial.print(gPacket.soa);
-    Serial.print(";soaNext:");
+    Serial.print(SEP);
+    Serial.print("soaNxt:");
     Serial.print(gPacket.soaNext);
-    Serial.print(";rt:");
+    Serial.print(SEP);    
+    Serial.print("rt:");
     Serial.print(gPacket.rt);
-    Serial.print(";result:");
+    Serial.print(SEP);
+    Serial.print("rslt:");
     Serial.print(char(gPacket.result));
-    Serial.print(";meanRt:");
+    Serial.print(SEP);
+    Serial.print("meanRt:");
     Serial.print(gPacket.meanRt);
-    Serial.print(";hitCount:");
+    Serial.print(SEP);
+    Serial.print("hitCnt:");
     Serial.print(gPacket.hitCount);
-    Serial.print(";missCount:");
+    Serial.print(SEP);
+    Serial.print("missCnt:");
     Serial.print(gPacket.missCount);
-    Serial.print(";cheatCount:");
+    Serial.print(SEP);
+    Serial.print("cheatCnt:");
     Serial.print(gPacket.cheatCount);
-    Serial.print(";hitRate:");
+    Serial.print(SEP);
+    Serial.print("hitRate:");
     Serial.print(gPacket.hitRate);    
-    Serial.print(";marker:");
+    Serial.print(SEP);
+    Serial.print("marker:");
     Serial.print(char(gPacket.marker));
-    Serial.print(";edges:");
+    Serial.print(SEP);
+    Serial.print("edg:");
     Serial.print(gPacket.edges);
-    Serial.print(";edgesDebounced:");
+    Serial.print(SEP);
+    Serial.print("edgDebncd:");
     Serial.print(gPacket.edgesDebounced);
-    Serial.print(";hold:");
+    Serial.print(SEP);
+    Serial.print("hold:");
     Serial.print(gPacket.hold);
-    Serial.print(";buttonDownCount:");
+    Serial.print(SEP);
+    Serial.print("btnDwnCnt:");
     Serial.print(gPacket.buttonDownCount);
-    Serial.print(";fileNumber:");
-    Serial.print(gPacket.fileNumber);   
-    Serial.print(";pwm:");
+    Serial.print(SEP);
+    Serial.print("fileNr:");
+    Serial.print(gPacket.fileNumber);
+    Serial.print(SEP);   
+    Serial.print("pwm:");
     Serial.println(gPacket.stimulusStrength);   
   }else{
     //byte array
@@ -720,26 +829,46 @@ void sendPacket(){
 }
 //-------------------------------------------------------------------------------------
 volatile unsigned long gLastEdge = 0;
-const unsigned long BOUNCING = 15000;//edges within BOUNCING micro secs after last handeled edge are discarded
+const unsigned long BOUNCING = 15000;//edges within BOUNCING micro secs after last edge are discarded
 
 void buttonISR(){
     
     unsigned long now = micros();
-    int buttonState = digitalRead(REACT_BUTTON_PIN);
+    //int buttonState = digitalRead(REACT_BUTTON_PIN); //this simple statement was used before to detect later if falling or rising edge and sometimes got wrong values! impressive fast bouncing spikes.
+    //so we do it below and with a little more insight
   
     //count edges
     gPacket.edges++;
     
     if (now - gLastEdge < BOUNCING){
-      return;
+      gLastEdge = now;
+      return; //discard
     }
 
     gLastEdge = now;
     gPacket.edgesDebounced++;
+    
+    //workaround for buttonState problem
+    int isrButtonState = digitalRead(REACT_BUTTON_PIN);
+    if (isrButtonState == gButtonState){ // new == old?
+      //here is something wrong, the ISR is issued by a change and now we detect no change (new value == old value)?! 
+      if (gButtonState==HIGH){ 
+        gPacket.edgesDebounced += 100;//we add 100 to log this strange event with a strange value for falling edge (push event)
+      }
+      else{
+        gPacket.edgesDebounced += 1000;//we add 1000 to log this strange event with a strange value for rising edge (release event)
+      }
+      //we trust the gButtonState (old stored value before the ISR) more and invert isrButtonState
+      if(isrButtonState==HIGH){
+        isrButtonState = LOW;
+      }else{
+        isrButtonState=HIGH;
+      }
+    }
 
     if (gExpRunningF){
 
-     if (buttonState==HIGH){//this is a button release
+     if (isrButtonState==HIGH){//this is a button release
         if (!gUnhandeledReleaseEventF){  
           gHoldStopT = now;
           gUnhandeledReleaseEventF = true;
@@ -756,6 +885,287 @@ void buttonISR(){
 
     } //expRunning
 }
+//-------------------------------------------------------------------------------------
+//below this line piezo measurement. to measure some indicational data from the vibro tactor via a piezo element on A0
+//-------------------------------------------------------------------------------------
+const String RAMP = "ramp";
+const String LAG = "lag";
+const String FREQ = "freq";
+const String US = " [us]:";
+const String HZ = " [Hz]:";
+
+// use external piezo to measure some tech details from vibrator motor (start lag, ramp up, rotation frequency)
+void measurement(){
+  
+    const int REPEATED_MEASUREMENT = 10;
+    long int lags[REPEATED_MEASUREMENT];
+    long int ramps[REPEATED_MEASUREMENT];
+    long int freqs[REPEATED_MEASUREMENT];
+    
+    ADCSRA = ADCSRA & 0b11111000 | 0x04;//setting adc prescaler to 16 => adc sampling > ~60kHz
+  
+    for(int i = 0; i<REPEATED_MEASUREMENT; i++){//measure 10 times
+       Serial.println(LINE);
+       Serial.print(i+1);
+       Serial.print("/");
+       Serial.println(REPEATED_MEASUREMENT);
+      //order important!:
+      //   measure_lag() relies that motor was switched off; 
+      //   measure_ramp() relies that measure_lag() was performed before
+      //   measure_freq() relies that measure_ramp() was performed before
+      digitalWrite(STIMULUS_LED_PIN,LOW);//switch off
+      delay(500);//wait 500ms
+     
+      lags[i] = measure_lag();
+    
+      if (lags[i] != ERR){
+        ramps[i] = measure_ramp();
+      }else{
+        ramps[i] = ERR;
+      }
+      freqs[i] = measure_freq();
+      
+    }   
+    
+       digitalWrite(STIMULUS_LED_PIN,LOW);//switch off
+       Serial.println(LINE);
+       Serial.print(" PWM ");
+       Serial.println(gStimulusStrength);
+       
+      int length;
+      
+      Serial.println("Medians");
+      length = discardErrors(lags, REPEATED_MEASUREMENT);
+      Serial.print(LAG);
+      Serial.print(US);
+      Serial.println(median(lags, length));
+      length = discardErrors(ramps, REPEATED_MEASUREMENT);
+      Serial.print(RAMP);
+      Serial.print(US);
+      Serial.println(median(ramps, length));
+      length = discardErrors(freqs, REPEATED_MEASUREMENT);
+      Serial.print(FREQ);
+      Serial.print(HZ);
+      Serial.println(median(freqs, length));
+
+       Serial.println(LINE); 
+       
+}
+
+//-------------------------------------------------------------------------------------
+long int measure_lag(){
+  
+    //measure for 100000us what is the avg&max noise while 'quiet'=motor off
+    Serial.println(LAG);
+
+    unsigned int noiseMax =0;
+    unsigned long int avgNoiseSum =0;
+    unsigned long int avgNoiseCount =0;
+    int avgNoise;
+    int analogIn;
+    unsigned long startQuietT = micros();
+    unsigned long nowT = micros();
+    boolean error = false;
+    
+    
+    //do{//read until low noise or timeout
+      while(1){
+        nowT = micros();
+        if ((nowT - startQuietT) > 100000){break;}//measure for 50ms
+        analogIn = analogRead(PIEZO);
+        avgNoiseSum += analogIn;
+        avgNoiseCount++;
+        if (analogIn > noiseMax){ noiseMax = analogIn;}
+      }//end while
+      avgNoise = avgNoiseSum / avgNoiseCount;
+    //  if ((nowT - startQuietT) > 1000000){error = true; break;}//max 1 sec
+    //}while(avgNoise > 20);
+    
+    //logic: switch motor on and stop time when analogValue is several samples higher than a threshold
+    unsigned long startOfMotorT =  micros();
+    setStimulus(gStimulusStrength);//switch motor on
+    int threshold = avgNoise + noiseMax/2 +2; //+2 prevent threshold=0 in realy quiet environment
+    
+    Serial.print(" thrs [0-1024]: ");
+    Serial.println(threshold);
+    
+    int overThresholdCount = 0;
+    
+    while(1){
+      nowT = micros();
+      analogIn = analogRead(PIEZO);
+      if (analogIn > threshold){
+        overThresholdCount++;
+         if (overThresholdCount > 30) {break;}
+      }else{
+        overThresholdCount = 0;
+      }  
+      if ((nowT - startOfMotorT) > 250000){error = true; break;}//maximum lag 250000 uSec
+    }//end while
+    long int lagT = (nowT- startOfMotorT);//save lag time
+    
+    if (error){
+      Serial.println("ERR");//timeout 
+      lagT = ERR;
+    }
+    
+    Serial.print(LAG);
+    Serial.print(US);
+    Serial.println(lagT);
+    
+    return lagT;
+    
+}
+
+
+//-------------------------------------------------------------------------------------
+long int measure_ramp(){
+  
+    //measure ramp up of motor
+    //logic: save the time everytime the input value level gets 10% higher;
+    //       the last saved time should be the end of the ramp 
+    Serial.println(RAMP);
+    int analogIn;
+    unsigned long nowT = micros();
+    unsigned long startOfRampT =  nowT;
+    unsigned long lastIntensityIncrementT =  nowT;
+    int intensityThreshold = 0;
+    int intensityThresholdCount = 0;
+    
+    while(1){
+      nowT = micros();
+      analogIn = analogRead(PIEZO);
+      if (analogIn > intensityThreshold) {
+        intensityThresholdCount++;
+        if (intensityThresholdCount > 15){// are more than 15 sequential measurement values above the threshold?
+          //set new threshold and save time
+          intensityThreshold = analogIn + analogIn/10;//set new intensityThreshold 10% higher
+          lastIntensityIncrementT = micros();
+        }
+      }else{
+        intensityThresholdCount=0;
+      }  
+  
+      if ((nowT - startOfRampT) > 1000000){ break;}//measure for max 1 000 000 uSec
+    }//end while
+    long int rampT = (lastIntensityIncrementT- startOfRampT);
+    
+    Serial.print(" thrs [0-1024]: ");
+    Serial.println(intensityThreshold);   
+    Serial.print(RAMP);
+    Serial.print(US);
+    Serial.println(rampT);
+    
+    return rampT;
+    
+}
+
+//-------------------------------------------------------------------------------------
+long int measure_freq(){
+  
+    //measure frequency  
+    //logic: the piezo generates a AC signal; part of it is discarded due to internal clamp diode (rectification); we measure from start of zeroPeriod to zeroPeriod to get frequency
+    Serial.println(FREQ);
+        
+    int analogIn;
+    unsigned long nowT = micros();
+    
+    unsigned long startFreqMeasurementT =  micros();
+    unsigned long zeroT;//start of last zero period (note: is not init! we do it with the firstFlag construct)
+    int oldAnalogIn = 1;
+    unsigned long int tempSum=0;//sum all diffT to average
+    unsigned long int tempCount=0;//
+    unsigned long int diffT;
+    boolean firstF = true;//flag if zeroT is init
+    long int freq;
+    
+    while(1){
+      nowT = micros();
+      diffT = nowT - zeroT;
+      analogIn = analogRead(PIEZO);
+    
+      if ((oldAnalogIn > 0) && (analogIn==0)){//start of zero period
+        if(((diffT > 2000) && (diffT < 20000))||(firstF)){//between 2000uSec and 20000uSec; 50Hz-500Hz; or zeroT is not init(firstF=true)
+          zeroT = nowT;
+          if(!firstF){ 
+            tempSum += diffT;
+            tempCount++;
+          }
+          firstF = false;  
+        }//50Hz-500Hz
+      }//zero period
+      oldAnalogIn = analogIn;
+    
+      if ((nowT - startFreqMeasurementT) > 500000){break;}//measure for 500 000 uSec
+    }//end while
+    
+    
+    if (tempCount>0){
+      
+      freq = (1000000 * tempCount) / (tempSum +1); //+1us prevent div0
+      Serial.print(FREQ);
+      Serial.print(HZ);
+      Serial.println(freq);
+      
+    }else{
+      Serial.println("ERR");
+      freq = ERR;
+    }
+    
+  return freq;
+
+  
+}
+
+//-------------------------------------------------------------------------------------
+int discardErrors(long int *array, int length){//adjust length so errors '-1' in sorted array are discarded
+
+  bubblesort(array, length);//sort ascending
+  
+  int countErrors = 0;
+  
+
+  for(int i=0; i<length; i++){
+    if (array[i] == ERR) countErrors++;
+  }
+  
+  for(int i=0; i+countErrors < length; i++){
+    array[i] = array[i+countErrors];//overwrite array fields which contains errors (-1), due to sorting they are on low fields. after that valid values are in [0] to [x]
+  }
+
+  return length - countErrors;
+  
+}
+//-------------------------------------------------------------------------------------
+long int median(long int *array, int length){
+  long int median;
+  int m;
+  //bubblesort(array, length);//already sorted by discardErrors
+  if (length % 2 == 0)
+    median = array[length/2];
+  else
+    median = (array[length/2] + array[(length/2)+1]) / 2;
+
+  return median;
+}
+//-------------------------------------------------------------------------------------
+ void bubblesort(long int *array, int length)//from wikibooks
+ {
+     int i, j;
+     for (i = 0; i < length -1; ++i) 
+     {
+ 
+ 	for (j = 0; j < length - i - 1; ++j) 
+        {
+ 	    if (array[j] > array[j + 1]) 
+            {
+ 		long int tmp = array[j];
+ 		array[j] = array[j + 1];
+ 		array[j + 1] = tmp;
+ 	    }
+ 	}
+     }
+ }
 //-------------------------------------------------------------------------------------
 
 

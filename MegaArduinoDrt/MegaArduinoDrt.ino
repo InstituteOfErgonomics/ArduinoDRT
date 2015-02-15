@@ -7,6 +7,7 @@
 //1.2      July, 2014   Michael Krause    meanRt and hitRate
 //1.3      Nov,  2014   Michael Krause    some changes to make mega-drt in line with plain-drt and ethernet-drt
 //2.0      Jan, 2015    Michael Krause    part. refactored (const EEPROM and handleCommand()) & improved ISR
+//2.1      Feb, 2015    Michael Krause    improved pwm+/-; 
 //------------------------------------------------------
 /*     
   GPL due to the use of SD libs.
@@ -75,7 +76,7 @@ const int DUO_COLOR_LED_RED = 2;
 
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;unixTimestamp;stimulusMultiX;nextStimulusMultiX;";
-const String VERSION = "V2.0-m";//with 'm'ega. version number is logged to result header
+const String VERSION = "V2.1-m";//with 'm'ega. version number is logged to result header
 const String LINE = "----------";
 const String SEP = ";";
 
@@ -522,11 +523,11 @@ void handleCommand(byte command){
               break;
             */
      	case '+'://careful eeprom write cycles are limited!
-              setPWM(++gStimulusStrength);
+              if (gStimulusStrength < 255) setPWM(++gStimulusStrength);
               break;       
      	case '-'://careful eeprom write cycles are limited!
-             setPWM(--gStimulusStrength);
-             break;       
+             if (gStimulusStrength > 1) setPWM(--gStimulusStrength);
+             break;        
   
       	case 't'://'t'est multiplextest
             multiplexTest();

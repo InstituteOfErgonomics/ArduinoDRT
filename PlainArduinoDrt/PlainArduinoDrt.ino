@@ -7,6 +7,7 @@
 //1.2      Aug, 2014    Michael Krause    meanRt and hitRate
 //1.3      Nov, 2014    Michael Krause    shortened error messages, this removes non logging on SDcard bug. Important note: SRAM (string const, etc) was full, 1.2.1 sketch was compiled without error but failed during operation 
 //2.0      Jan, 2015    Michael Krause    part. refactored (const EEPROM and handleCommand()) & added measurement() for piezo & improved ISR
+//2.1      Feb, 2015    Michael Krause    improved pwm+/-; changed measurement from piezo to bemf 
 //------------------------------------------------------
 /*
   GPL due to the use of SD libs.
@@ -47,15 +48,15 @@ const int SD_CARD_LED_PIN_L = 7;//duoColorLED for SD-card status low pin
 const int SD_CARD_LED_PIN_H = 8;//duoColorLED for SD-card status high pin
 const int STIMULUS_LED_PIN = 9; // stimulus led / tactile tactor
 
-const int PIEZO = 0;//piezo connected to analog0
-const int ERR = -1;//error in piezo measurement
+const int BEMF = 0;//bemf sense wire connected to analog0
+const int ERR = -1;//error in measurement
 
 const int DUO_COLOR_LED_OFF = 0; 
 const int DUO_COLOR_LED_GREEN = 1; 
 const int DUO_COLOR_LED_RED = 2; 
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;buttonDownCount;pwm;";
-const String VERSION = "V2.0-plain";//plain, without Ethernet. version number is logged to result header
+const String VERSION = "V2.1-plain";//plain, without Ethernet. version number is logged to result header
 const String LINE = "----------";
 const String SEP = ";";
 
@@ -348,10 +349,10 @@ void handleCommand(byte command){
               break;
             */
      	case '+'://careful eeprom write cycles are limited!
-              setPWM(++gStimulusStrength);
+              if (gStimulusStrength < 255) setPWM(++gStimulusStrength);
               break;       
      	case '-'://careful eeprom write cycles are limited!
-             setPWM(--gStimulusStrength);
+             if (gStimulusStrength > 1) setPWM(--gStimulusStrength);
              break;       
   
       	case 't'://toggle stimulus on/off
@@ -886,266 +887,123 @@ void buttonISR(){
     } //expRunning
 }
 //-------------------------------------------------------------------------------------
-//below this line piezo measurement. to measure some indicational data from the vibro tactor via a piezo element on A0
+//below this line  measurement. to measure some indicational data from the vibro tactor via bemf sense wire A0
 //-------------------------------------------------------------------------------------
-const String RAMP = "ramp";
-const String LAG = "lag";
-const String FREQ = "freq";
-const String US = " [us]:";
-const String HZ = " [Hz]:";
-
-// use external piezo to measure some tech details from vibrator motor (start lag, ramp up, rotation frequency)
 void measurement(){
   
     const int REPEATED_MEASUREMENT = 10;
-    long int lags[REPEATED_MEASUREMENT];
-    long int ramps[REPEATED_MEASUREMENT];
-    long int freqs[REPEATED_MEASUREMENT];
+    long int embf_00[REPEATED_MEASUREMENT];//measurement of lag time until motor is moving and generates little bit embf
+    long int embf_01[REPEATED_MEASUREMENT];//measurement until embf is raised ~0.1V
+    long int embf_02[REPEATED_MEASUREMENT];//measurement until embf is raised ~0.2V
+    long int embf_03[REPEATED_MEASUREMENT];//measurement until embf is raised ~0.3V
     
     ADCSRA = ADCSRA & 0b11111000 | 0x04;//setting adc prescaler to 16 => adc sampling > ~60kHz
-  
+    
+    //note: this is not synchronized to the pwm cycles
+    
+      //init
+      for(int i = 0; i<REPEATED_MEASUREMENT;i++){
+       embf_00[i] = ERR;
+       embf_01[i] = ERR;
+       embf_02[i] = ERR;
+       embf_03[i] = ERR;
+      }    
+    
+    
+    Serial.println(LINE);
+    Serial.print(" PWM ");
+    Serial.println(gStimulusStrength);
+    Serial.print("[");
+    for(int i = 0; i<REPEATED_MEASUREMENT;i++){
+      Serial.print("-");
+    }
+    Serial.print("]");
+    Serial.print(REPEATED_MEASUREMENT);
+    Serial.println("x");
+    
+    
+    Serial.print("[");
     for(int i = 0; i<REPEATED_MEASUREMENT; i++){//measure 10 times
-       Serial.println(LINE);
-       Serial.print(i+1);
-       Serial.print("/");
-       Serial.println(REPEATED_MEASUREMENT);
-      //order important!:
-      //   measure_lag() relies that motor was switched off; 
-      //   measure_ramp() relies that measure_lag() was performed before
-      //   measure_freq() relies that measure_ramp() was performed before
+      Serial.print("-");
       digitalWrite(STIMULUS_LED_PIN,LOW);//switch off
       delay(500);//wait 500ms
-     
-      lags[i] = measure_lag();
-    
-      if (lags[i] != ERR){
-        ramps[i] = measure_ramp();
-      }else{
-        ramps[i] = ERR;
-      }
-      freqs[i] = measure_freq();
       
-    }   
-    
-       digitalWrite(STIMULUS_LED_PIN,LOW);//switch off
-       Serial.println(LINE);
-       Serial.print(" PWM ");
-       Serial.println(gStimulusStrength);
-       
-      int length;
+      setStimulus(gStimulusStrength);//switch motor on
       
-      Serial.println("Medians");
-      length = discardErrors(lags, REPEATED_MEASUREMENT);
-      Serial.print(LAG);
-      Serial.print(US);
-      Serial.println(median(lags, length));
-      length = discardErrors(ramps, REPEATED_MEASUREMENT);
-      Serial.print(RAMP);
-      Serial.print(US);
-      Serial.println(median(ramps, length));
-      length = discardErrors(freqs, REPEATED_MEASUREMENT);
-      Serial.print(FREQ);
-      Serial.print(HZ);
-      Serial.println(median(freqs, length));
-
-       Serial.println(LINE); 
-       
-}
-
-//-------------------------------------------------------------------------------------
-long int measure_lag(){
-  
-    //measure for 100000us what is the avg&max noise while 'quiet'=motor off
-    Serial.println(LAG);
-
-    unsigned int noiseMax =0;
-    unsigned long int avgNoiseSum =0;
-    unsigned long int avgNoiseCount =0;
-    int avgNoise;
-    int analogIn;
-    unsigned long startQuietT = micros();
-    unsigned long nowT = micros();
-    boolean error = false;
-    
-    
-    //do{//read until low noise or timeout
+      boolean embf00 = false;
+      boolean embf01 = false;
+      boolean embf02 = false;
+      boolean embf03 = false;
+      
+      unsigned long startMeasurementT =  micros();
+      unsigned long nowT;
+      
       while(1){
-        nowT = micros();
-        if ((nowT - startQuietT) > 100000){break;}//measure for 50ms
-        analogIn = analogRead(PIEZO);
-        avgNoiseSum += analogIn;
-        avgNoiseCount++;
-        if (analogIn > noiseMax){ noiseMax = analogIn;}
-      }//end while
-      avgNoise = avgNoiseSum / avgNoiseCount;
-    //  if ((nowT - startQuietT) > 1000000){error = true; break;}//max 1 sec
-    //}while(avgNoise > 20);
-    
-    //logic: switch motor on and stop time when analogValue is several samples higher than a threshold
-    unsigned long startOfMotorT =  micros();
-    setStimulus(gStimulusStrength);//switch motor on
-    int threshold = avgNoise + noiseMax/2 +2; //+2 prevent threshold=0 in realy quiet environment
-    
-    Serial.print(" thrs [0-1024]: ");
-    Serial.println(threshold);
-    
-    int overThresholdCount = 0;
-    
-    while(1){
-      nowT = micros();
-      analogIn = analogRead(PIEZO);
-      if (analogIn > threshold){
-        overThresholdCount++;
-         if (overThresholdCount > 30) {break;}
-      }else{
-        overThresholdCount = 0;
-      }  
-      if ((nowT - startOfMotorT) > 250000){error = true; break;}//maximum lag 250000 uSec
-    }//end while
-    long int lagT = (nowT- startOfMotorT);//save lag time
-    
-    if (error){
-      Serial.println("ERR");//timeout 
-      lagT = ERR;
-    }
-    
-    Serial.print(LAG);
-    Serial.print(US);
-    Serial.println(lagT);
-    
-    return lagT;
-    
-}
-
-
-//-------------------------------------------------------------------------------------
-long int measure_ramp(){
-  
-    //measure ramp up of motor
-    //logic: save the time everytime the input value level gets 10% higher;
-    //       the last saved time should be the end of the ramp 
-    Serial.println(RAMP);
-    int analogIn;
-    unsigned long nowT = micros();
-    unsigned long startOfRampT =  nowT;
-    unsigned long lastIntensityIncrementT =  nowT;
-    int intensityThreshold = 0;
-    int intensityThresholdCount = 0;
-    
-    while(1){
-      nowT = micros();
-      analogIn = analogRead(PIEZO);
-      if (analogIn > intensityThreshold) {
-        intensityThresholdCount++;
-        if (intensityThresholdCount > 15){// are more than 15 sequential measurement values above the threshold?
-          //set new threshold and save time
-          intensityThreshold = analogIn + analogIn/10;//set new intensityThreshold 10% higher
-          lastIntensityIncrementT = micros();
-        }
-      }else{
-        intensityThresholdCount=0;
-      }  
-  
-      if ((nowT - startOfRampT) > 1000000){ break;}//measure for max 1 000 000 uSec
-    }//end while
-    long int rampT = (lastIntensityIncrementT- startOfRampT);
-    
-    Serial.print(" thrs [0-1024]: ");
-    Serial.println(intensityThreshold);   
-    Serial.print(RAMP);
-    Serial.print(US);
-    Serial.println(rampT);
-    
-    return rampT;
-    
-}
-
-//-------------------------------------------------------------------------------------
-long int measure_freq(){
-  
-    //measure frequency  
-    //logic: the piezo generates a AC signal; part of it is discarded due to internal clamp diode (rectification); we measure from start of zeroPeriod to zeroPeriod to get frequency
-    Serial.println(FREQ);
         
-    int analogIn;
-    unsigned long nowT = micros();
-    
-    unsigned long startFreqMeasurementT =  micros();
-    unsigned long zeroT;//start of last zero period (note: is not init! we do it with the firstFlag construct)
-    int oldAnalogIn = 1;
-    unsigned long int tempSum=0;//sum all diffT to average
-    unsigned long int tempCount=0;//
-    unsigned long int diffT;
-    boolean firstF = true;//flag if zeroT is init
-    long int freq;
-    
-    while(1){
-      nowT = micros();
-      diffT = nowT - zeroT;
-      analogIn = analogRead(PIEZO);
-    
-      if ((oldAnalogIn > 0) && (analogIn==0)){//start of zero period
-        if(((diffT > 2000) && (diffT < 20000))||(firstF)){//between 2000uSec and 20000uSec; 50Hz-500Hz; or zeroT is not init(firstF=true)
-          zeroT = nowT;
-          if(!firstF){ 
-            tempSum += diffT;
-            tempCount++;
-          }
-          firstF = false;  
-        }//50Hz-500Hz
-      }//zero period
-      oldAnalogIn = analogIn;
-    
-      if ((nowT - startFreqMeasurementT) > 500000){break;}//measure for 500 000 uSec
-    }//end while
-    
-    
-    if (tempCount>0){
-      
-      freq = (1000000 * tempCount) / (tempSum +1); //+1us prevent div0
-      Serial.print(FREQ);
-      Serial.print(HZ);
-      Serial.println(freq);
-      
-    }else{
-      Serial.println("ERR");
-      freq = ERR;
-    }
-    
-  return freq;
+        
+        //do one sample
+        digitalWrite(STIMULUS_LED_PIN,LOW);//switch off
+        delayMicroseconds(50);
+        nowT = micros();
+        int analogIn = analogRead(BEMF);
+        setStimulus(gStimulusStrength);//switch motor on
+        delayMicroseconds(450);
+        
+        //handle this sample
+        if ((analogIn < 1020)&& (!embf00)){
+          embf_00[i] = nowT - startMeasurementT;
+          embf00 = true;//set flag we have this value
+        }
+        if ((analogIn < 1000)&& (!embf01)){
+          embf_01[i] = nowT - startMeasurementT;
+          embf01 = true;//set flag we have this value
+        }
+        if ((analogIn < 980)&& (!embf02)){
+          embf_02[i] = nowT - startMeasurementT;
+          embf02 = true;//set flag we have this value
+        }
+        if ((analogIn < 960)&& (!embf03)){
+          embf_03[i] = nowT - startMeasurementT;
+          embf03 = true;//set flag we have this value
+        }
+   
+        
+        if ((nowT - startMeasurementT) > 500000){break;}//measure for 500 000 uSec
+      }//end while      
 
-  
-}
-
-//-------------------------------------------------------------------------------------
-int discardErrors(long int *array, int length){//adjust length so errors '-1' in sorted array are discarded
-
-  bubblesort(array, length);//sort ascending
-  
-  int countErrors = 0;
-  
-
-  for(int i=0; i<length; i++){
-    if (array[i] == ERR) countErrors++;
-  }
-  
-  for(int i=0; i+countErrors < length; i++){
-    array[i] = array[i+countErrors];//overwrite array fields which contains errors (-1), due to sorting they are on low fields. after that valid values are in [0] to [x]
-  }
-
-  return length - countErrors;
-  
+    }//for REPEATED_MEASUREMENT
+      Serial.println("]");
+      Serial.println("Medians[uS]:");
+      Serial.print("lag: ");
+      median(embf_00, REPEATED_MEASUREMENT); 
+      Serial.print("0.1V: ");
+      median(embf_01, REPEATED_MEASUREMENT); 
+      Serial.print("0.2V: ");
+      median(embf_02, REPEATED_MEASUREMENT); 
+      Serial.print("0.3V: ");
+      median(embf_03, REPEATED_MEASUREMENT); 
+          
+    
+    digitalWrite(STIMULUS_LED_PIN,LOW);//switch off
 }
 //-------------------------------------------------------------------------------------
 long int median(long int *array, int length){
   long int median;
   int m;
-  //bubblesort(array, length);//already sorted by discardErrors
-  if (length % 2 == 0)
+  
+  bubblesort(array, length);
+  
+  length = discardErrors(array, length);
+
+  if (length % 2 == 1)
     median = array[length/2];
   else
     median = (array[length/2] + array[(length/2)+1]) / 2;
 
+      Serial.print(median);
+      Serial.print(" N=");
+      Serial.println(length);
+      
   return median;
 }
 //-------------------------------------------------------------------------------------
@@ -1167,5 +1025,23 @@ long int median(long int *array, int length){
      }
  }
 //-------------------------------------------------------------------------------------
+int discardErrors(long int *array, int length){//adjust length so errors '-1' in sorted array are discarded
 
+  bubblesort(array, length);//sort ascending is done by median() itself, but here again
+  
+  int countErrors = 0;
+  
+
+  for(int i=0; i<length; i++){
+    if (array[i] == ERR) countErrors++;
+  }
+  
+  for(int i=0; i < length-countErrors; i++){
+    array[i] = array[i+countErrors];//overwrite array fields which contains errors (-1), due to sorting they are on low fields. after that valid values are in [0] to [x]
+  }
+
+  return length - countErrors;//return adjusted length
+  
+}
+//-------------------------------------------------------------------------------------
 

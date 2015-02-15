@@ -8,6 +8,7 @@
 //1.2.1    Aug, 2014    Michael Krause    added error msg
 //1.3      Nov, 2014    Michael Krause    shortened error messages, this removes non logging on SDcard bug. Important note: SRAM (string const, etc) was full, 1.2.1 sketch was compiled without error but failed during operation 
 //2.0      Jan, 2015    Michael Krause    part. refactored (const EEPROM and handleCommand()) & improved ISR
+//2.1      Feb, 2015    Michael Krause    improved pwm+/-;
 //------------------------------------------------------
 /*
   GPL due to the use of SD libs.
@@ -54,7 +55,7 @@ const int DUO_COLOR_LED_GREEN = 1;
 const int DUO_COLOR_LED_RED = 2; 
 
 const String HEADER = "cnt;stimT;onsetDly;soa;soaNxt;rt;rslt;marker;edgs;edgsDbncd;hld;btnDwnCnt;pwm;";
-const String VERSION = "V2.0-e";//with 'e'thernet. version number is logged to result header
+const String VERSION = "V2.1-e";//with 'e'thernet. version number is logged to result header
 const String LINE = "----------";
 const String SEP = ";";
 
@@ -95,6 +96,7 @@ int gButtonState;//button state of reaction button
   // Newer Ethernet shields have a MAC address printed on a sticker on the shield
   byte gMac[] = {0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
   IPAddress gIp(192,168,1,15);
+  //IPAddress gIp(10,152,238,77);
   
   // the router's gateway address:
   //byte gGateway[] = { 192, 168, 2, 1 };
@@ -366,10 +368,10 @@ void handleCommand(byte command){
               break;
             */
      	case '+'://careful eeprom write cycles are limited!
-              setPWM(++gStimulusStrength);
+              if (gStimulusStrength < 255) setPWM(++gStimulusStrength);
               break;       
      	case '-'://careful eeprom write cycles are limited!
-             setPWM(--gStimulusStrength);
+             if (gStimulusStrength > 1) setPWM(--gStimulusStrength);
              break;       
   
       	case 't'://toggle stimulus on/off
@@ -381,8 +383,8 @@ void handleCommand(byte command){
       	case 'p'://'p' ping
             gPacket.result = 'P'; // 'P' ping back
             sendPacket();//send ping packet as message
-          break;           
-
+          break; 
+          
 /*       
     //used during an experiment with different PWMs
       	case 's'://measurement

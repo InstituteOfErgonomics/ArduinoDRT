@@ -8,6 +8,9 @@
 //1.3      Nov,  2014   Michael Krause    some changes to make mega-drt in line with plain-drt and ethernet-drt
 //2.0      Jan, 2015    Michael Krause    part. refactored (const EEPROM and handleCommand()) & improved ISR
 //2.1      Feb, 2015    Michael Krause    improved pwm+/-; 
+//2.2      Mar, 2015    Michael Krause    same readable statements in plain/ethernet/mega; added reset eeprom command for file number
+//
+//VERSION const
 //------------------------------------------------------
 /*     
   GPL due to the use of SD libs.
@@ -76,7 +79,7 @@ const int DUO_COLOR_LED_RED = 2;
 
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;unixTimestamp;stimulusMultiX;nextStimulusMultiX;";
-const String VERSION = "V2.1-m";//with 'm'ega. version number is logged to result header
+const String VERSION = "V2.2-m";//with 'm'ega. version number is logged to result header
 const String LINE = "----------";
 const String SEP = ";";
 
@@ -431,7 +434,7 @@ void modEpromNumber(){//set the eprom to the next full hundred number
   int highB = EEPROM.read(EEPROM_FILENUM_H);
   unsigned int temp = lowB + (highB << 8);
 
- gPacket.fileNumber = temp;//transmit and save old filenumber
+  gCurFileNumber = temp;
  
   if (temp % 100 > 0){
     temp += 100 -(temp % 100); 
@@ -477,8 +480,8 @@ void incCurFileNumber(){
 //-------------------------------------------------------------------------------------
 void handleStartStopButton() {//called in every loop
   
-  const unsigned int SSCOUNT_ACTION_AT = 300;
-  const unsigned int SSCOUNT_PRESSED_AND_HANDLED = 301;
+  const unsigned int SSCOUNT_ACTION_AT = 15;
+  const unsigned int SSCOUNT_PRESSED_AND_HANDLED = SSCOUNT_ACTION_AT+1;
   
   static unsigned long ssDownOld; 
   static unsigned long ssCount; 
@@ -544,7 +547,12 @@ void handleCommand(byte command){
 
       	case 'i'://'i'p  print/show ip over serial line
              printIp();
-          break;           
+          break;    
+   
+      	case '~'://reset file number in eeprom
+            EEPROM.write(EEPROM_FILENUM_L, 0); 
+            EEPROM.write(EEPROM_FILENUM_H, 0);
+          break;          
 
 /*       
     //used during an experiment with different PWMs
@@ -635,13 +643,10 @@ void loop() {
     static unsigned long last;
     if ((now - last) > 1000){ //if expriment not running, send every second a "R" ready packet
       last = now;
-        unsigned int temp1 = gPacket.edges;//we save edges over the packet reset, so we can see remotely if the button works
-        unsigned int temp2 = gPacket.edgesDebounced;//we save edgesDebounced over the packet reset, so we can see remotely if the button works
         //reset packet 
         memset((byte*)gpPacket,0, sizeof(sDrtPacket));
         gPacket.result = 'R'; // 'R' Ready to start
-        gPacket.edges = temp1;
-        gPacket.edgesDebounced = temp2;
+        gPacket.fileNumber = gCurFileNumber;
         sendPacket();//send empty packet as ready message
     }
     
@@ -998,8 +1003,6 @@ void sendPacket(){
    gPacket.stimulusStrength = gStimulusStrength;
 
   if(gReadablePacketSendF){ 
-    
-   //NOTE: this needs a lot of SRAM; if you dont need it comment it out, delete or just transmit what is interesting to you.  
 
       //readable over ethernet 
       gServer.print("cnt:");
@@ -1050,12 +1053,13 @@ void sendPacket(){
      
       
       
-    //readable over serial   
-    Serial.print("cnt;");
+    //readable over serial  
+   
+    Serial.print("cnt:");
     Serial.print(gPacket.count);
-    Serial.print(";stimT:");
+    Serial.print(";stmT:");
     Serial.print(gPacket.stimulusT);
-    Serial.print(";onsetDly:");
+    Serial.print(";onstDly:");
     Serial.print(gPacket.onsetDelay);
     Serial.print(";soa:");
     Serial.print(gPacket.soa);
@@ -1067,19 +1071,19 @@ void sendPacket(){
     Serial.print(char(gPacket.result));
     Serial.print(";meanRt:");
     Serial.print(gPacket.meanRt);
-    Serial.print(";hitCount:");
+    Serial.print(";hCnt:");
     Serial.print(gPacket.hitCount);
-    Serial.print(";missCount:");
+    Serial.print(";mCnt:");
     Serial.print(gPacket.missCount);
-    Serial.print(";cheatCount:");
+    Serial.print(";cCnt:");
     Serial.print(gPacket.cheatCount);
     Serial.print(";hitRate:");
-    Serial.print(gPacket.hitRate);    
+    Serial.print(gPacket.hitRate);
     Serial.print(";marker:");
     Serial.print(char(gPacket.marker));
-    Serial.print(";edges:");
+    Serial.print(";edgs:");
     Serial.print(gPacket.edges);
-    Serial.print(";edgesDbncd:");
+    Serial.print(";edgsDbncd:");
     Serial.print(gPacket.edgesDebounced);
     Serial.print(";hold:");
     Serial.print(gPacket.hold);

@@ -8,6 +8,9 @@
 //1.3      Nov, 2014    Michael Krause    shortened error messages, this removes non logging on SDcard bug. Important note: SRAM (string const, etc) was full, 1.2.1 sketch was compiled without error but failed during operation 
 //2.0      Jan, 2015    Michael Krause    part. refactored (const EEPROM and handleCommand()) & added measurement() for piezo & improved ISR
 //2.1      Feb, 2015    Michael Krause    improved pwm+/-; changed measurement from piezo to bemf 
+//2.2      Mar, 2015    Michael Krause    same readable statements in plain/ethernet/mega; added reset eeprom command for file number
+//
+//VERSION const
 //------------------------------------------------------
 /*
   GPL due to the use of SD libs.
@@ -56,7 +59,7 @@ const int DUO_COLOR_LED_GREEN = 1;
 const int DUO_COLOR_LED_RED = 2; 
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;buttonDownCount;pwm;";
-const String VERSION = "V2.1-plain";//plain, without Ethernet. version number is logged to result header
+const String VERSION = "V2.2-plain";//plain, without Ethernet. version number is logged to result header
 const String LINE = "----------";
 const String SEP = ";";
 
@@ -101,7 +104,7 @@ typedef struct myDrtPacket{
   unsigned long soa;//random stimulus onset asynchrony in us; current
   unsigned long soaNext;//random stimulus onset asynchrony in us between current and next
   unsigned long rt;// reaction time in us; in case of miss, rt is set to 0
-  byte result; //'H' hit, 'M' miss or 'C' cheat. status message 'R' ready to start, '$' experiment started, '#' experimentz stopped, 'N' no sd card, 'E' error while logging
+  byte result; //'H' hit, 'M' miss or 'C' cheat. status message 'R' ready to start, '#' experiment started, '$' experimentz stopped, 'N' no sd card, 'E' error while logging
   unsigned long meanRt;// mean rt in this experiement, up to now
   unsigned long hitCount;//count hits in this experiment 
   unsigned long missCount;//count miss in this experiment 
@@ -256,12 +259,12 @@ void modEpromNumber(){//set the eprom to the next hundred number
   int lowB  = EEPROM.read(EEPROM_FILENUM_L);  
   int highB = EEPROM.read(EEPROM_FILENUM_H);
   unsigned int temp = lowB + (highB << 8);
-
- gPacket.fileNumber = temp;//transmit and save old filenumber
  
+  gCurFileNumber = temp;
+  
   if (temp % 100 > 0){
     temp += 100 -(temp % 100); 
-  }
+  }  
   
   //save to eeprom
   EEPROM.write(EEPROM_FILENUM_L,  lowByte(temp)); 
@@ -303,8 +306,8 @@ void incCurFileNumber(){
 //-------------------------------------------------------------------------------------
 void handleStartStopButton() {//called in every loop
   
-  const unsigned int SSCOUNT_ACTION_AT = 300;
-  const unsigned int SSCOUNT_PRESSED_AND_HANDLED = 301;
+  const unsigned int SSCOUNT_ACTION_AT = 15;
+  const unsigned int SSCOUNT_PRESSED_AND_HANDLED = SSCOUNT_ACTION_AT+1;
   
   static unsigned long ssDownOld; 
   static unsigned long ssCount; 
@@ -361,8 +364,13 @@ void handleCommand(byte command){
             else digitalWrite(STIMULUS_LED_PIN,LOW);
           break; 
           
-      	case 'm'://measurement via piezo
+      	case 'm'://measurement via bemf
           measurement();
+          break;
+
+      	case '~'://reset file number in eeprom
+            EEPROM.write(EEPROM_FILENUM_L, 0); 
+            EEPROM.write(EEPROM_FILENUM_H, 0);
           break;
 
 /*       
@@ -441,13 +449,10 @@ void loop() {
     static unsigned long last;
     if ((now - last) > 1000){ //if expriment not running, send every second a "R" ready packet
       last = now;
-        unsigned int temp1 = gPacket.edges;//we save edges over the packet reset
-        unsigned int temp2 = gPacket.edgesDebounced;//we save edgesDebounced over the packet reset
         //reset packet 
         memset((byte*)gpPacket,0, sizeof(sDrtPacket));
         gPacket.result = 'R'; // 'R' Ready to start
-        gPacket.edges = temp1;
-        gPacket.edgesDebounced = temp2;
+        gPacket.fileNumber = gCurFileNumber;
         sendPacket();//send empty packet as ready message
     }
   } 
@@ -763,63 +768,45 @@ void sendPacket(){
 
   if(gReadablePacketSendF){  
     //readable  
-   //NOTE: this needs a lot of SRAM; if you dont need it comment it out, delete or just transmit what is interesting to you.  
     Serial.print("cnt:");
     Serial.print(gPacket.count);
-    Serial.print(SEP);
-    Serial.print("stimuT:");
+    Serial.print(";stmT:");
     Serial.print(gPacket.stimulusT);
-    Serial.print(SEP);
-    Serial.print("onsetDelay:");
+    Serial.print(";onstDly:");
     Serial.print(gPacket.onsetDelay);
-    Serial.print(SEP);
-    Serial.print("soa:");
+    Serial.print(";soa:");
     Serial.print(gPacket.soa);
-    Serial.print(SEP);
-    Serial.print("soaNxt:");
+    Serial.print(";soaNxt:");
     Serial.print(gPacket.soaNext);
-    Serial.print(SEP);    
-    Serial.print("rt:");
+    Serial.print(";rt:");
     Serial.print(gPacket.rt);
-    Serial.print(SEP);
-    Serial.print("rslt:");
+    Serial.print(";rslt:");
     Serial.print(char(gPacket.result));
-    Serial.print(SEP);
-    Serial.print("meanRt:");
+    Serial.print(";meanRt:");
     Serial.print(gPacket.meanRt);
-    Serial.print(SEP);
-    Serial.print("hitCnt:");
+    Serial.print(";hCnt:");
     Serial.print(gPacket.hitCount);
-    Serial.print(SEP);
-    Serial.print("missCnt:");
+    Serial.print(";mCnt:");
     Serial.print(gPacket.missCount);
-    Serial.print(SEP);
-    Serial.print("cheatCnt:");
+    Serial.print(";cCnt:");
     Serial.print(gPacket.cheatCount);
-    Serial.print(SEP);
-    Serial.print("hitRate:");
-    Serial.print(gPacket.hitRate);    
-    Serial.print(SEP);
-    Serial.print("marker:");
+    Serial.print(";hitRate:");
+    Serial.print(gPacket.hitRate);
+    Serial.print(";marker:");
     Serial.print(char(gPacket.marker));
-    Serial.print(SEP);
-    Serial.print("edg:");
+    Serial.print(";edgs:");
     Serial.print(gPacket.edges);
-    Serial.print(SEP);
-    Serial.print("edgDebncd:");
+    Serial.print(";edgsDbncd:");
     Serial.print(gPacket.edgesDebounced);
-    Serial.print(SEP);
-    Serial.print("hold:");
+    Serial.print(";hold:");
     Serial.print(gPacket.hold);
-    Serial.print(SEP);
-    Serial.print("btnDwnCnt:");
+    Serial.print(";btnDwnC:");
     Serial.print(gPacket.buttonDownCount);
-    Serial.print(SEP);
-    Serial.print("fileNr:");
-    Serial.print(gPacket.fileNumber);
-    Serial.print(SEP);   
-    Serial.print("pwm:");
-    Serial.println(gPacket.stimulusStrength);   
+    Serial.print(";fileN:");
+    Serial.print(gPacket.fileNumber); 
+    Serial.print(";pwm:");
+    Serial.println(gPacket.stimulusStrength);       
+
   }else{
     //byte array
     Serial.write((byte*)gpPacket,sizeof(sDrtPacket));//send oevr serial com/usb
@@ -911,20 +898,13 @@ void measurement(){
     
     
     Serial.println(LINE);
-    Serial.print(" PWM ");
+    Serial.print(" PWM: ");
     Serial.println(gStimulusStrength);
-    Serial.print("[");
-    for(int i = 0; i<REPEATED_MEASUREMENT;i++){
-      Serial.print("-");
-    }
-    Serial.print("]");
-    Serial.print(REPEATED_MEASUREMENT);
-    Serial.println("x");
     
-    
-    Serial.print("[");
-    for(int i = 0; i<REPEATED_MEASUREMENT; i++){//measure 10 times
-      Serial.print("-");
+    for(int i = 0; i<REPEATED_MEASUREMENT; i++){//measure REPEATED_MEASUREMENT times
+      Serial.print(i+1);
+      Serial.print("/");
+      Serial.println(REPEATED_MEASUREMENT);
       digitalWrite(STIMULUS_LED_PIN,LOW);//switch off
       delay(500);//wait 500ms
       

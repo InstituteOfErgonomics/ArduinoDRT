@@ -9,6 +9,9 @@
 //1.3      Nov, 2014    Michael Krause    shortened error messages, this removes non logging on SDcard bug. Important note: SRAM (string const, etc) was full, 1.2.1 sketch was compiled without error but failed during operation 
 //2.0      Jan, 2015    Michael Krause    part. refactored (const EEPROM and handleCommand()) & improved ISR
 //2.1      Feb, 2015    Michael Krause    improved pwm+/-;
+//2.2      Mar, 2015    Michael Krause    same readable statements in plain/ethernet/mega; added reset eeprom command for file number
+//
+//VERSION const
 //------------------------------------------------------
 /*
   GPL due to the use of SD libs.
@@ -55,7 +58,7 @@ const int DUO_COLOR_LED_GREEN = 1;
 const int DUO_COLOR_LED_RED = 2; 
 
 const String HEADER = "cnt;stimT;onsetDly;soa;soaNxt;rt;rslt;marker;edgs;edgsDbncd;hld;btnDwnCnt;pwm;";
-const String VERSION = "V2.1-e";//with 'e'thernet. version number is logged to result header
+const String VERSION = "V2.2-e";//with 'e'thernet. version number is logged to result header
 const String LINE = "----------";
 const String SEP = ";";
 
@@ -118,7 +121,7 @@ typedef struct myDrtPacket{
   unsigned long soa;//random stimulus onset asynchrony in us; current
   unsigned long soaNext;//random stimulus onset asynchrony in us between current and next
   unsigned long rt;// reaction time in us; in case of miss, rt is set to 0
-  byte result; //'H' hit, 'M' miss or 'C' cheat. status message 'R' ready to start, '$' experiment started, '#' experimentz stopped, 'N' no sd card, 'E' error while logging
+  byte result; //'H' hit, 'M' miss or 'C' cheat. status message 'R' ready to start, '#' experiment started, '$' experimentz stopped, 'N' no sd card, 'E' error while logging
   unsigned long meanRt;// mean rt in this experiement, up to now
   unsigned long hitCount;//count hits in this experiment 
   unsigned long missCount;//count miss in this experiment 
@@ -275,7 +278,7 @@ void modEpromNumber(){//set the eprom to the next hundred number
   int highB = EEPROM.read(EEPROM_FILENUM_H);
   unsigned int temp = lowB + (highB << 8);
 
- gPacket.fileNumber = temp;//transmit and save old filenumber
+  gCurFileNumber = temp;
  
   if (temp % 100 > 0){
     temp += 100 -(temp % 100); 
@@ -322,8 +325,9 @@ void incCurFileNumber(){
 //-------------------------------------------------------------------------------------
 void handleStartStopButton() {//called in every loop
   
-  const unsigned int SSCOUNT_ACTION_AT = 300;
-  const unsigned int SSCOUNT_PRESSED_AND_HANDLED = 301;
+  const unsigned int SSCOUNT_ACTION_AT = 15;
+  const unsigned int SSCOUNT_PRESSED_AND_HANDLED = SSCOUNT_ACTION_AT+1;
+
   
   static unsigned long ssDownOld; 
   static unsigned long ssCount; 
@@ -384,6 +388,11 @@ void handleCommand(byte command){
             gPacket.result = 'P'; // 'P' ping back
             sendPacket();//send ping packet as message
           break; 
+
+      	case '~'://reset file number in eeprom
+            EEPROM.write(EEPROM_FILENUM_L, 0); 
+            EEPROM.write(EEPROM_FILENUM_H, 0);
+          break;          
           
 /*       
     //used during an experiment with different PWMs
@@ -472,13 +481,10 @@ void loop() {
     static unsigned long last;
     if ((now - last) > 1000){ //if expriment not running, send every second a "R" ready packet
       last = now;
-        unsigned int temp1 = gPacket.edges;//we save edges over the packet reset, so we can see remotely if the button works?
-        unsigned int temp2 = gPacket.edgesDebounced;//we save edgesDebounced over the packet reset, so we can see remotely if the button works?
         //reset packet 
         memset((byte*)gpPacket,0, sizeof(sDrtPacket));
         gPacket.result = 'R'; // 'R' Ready to start
-        gPacket.edges = temp1;
-        gPacket.edgesDebounced = temp2;
+        gPacket.fileNumber = gCurFileNumber;
         sendPacket();//send empty packet as ready message
     }
     
@@ -807,8 +813,6 @@ void sendPacket(){
 
   if(gReadablePacketSendF){ 
 
-   //NOTE: this needs a lot of SRAM; if you dont need it comment it out, delete or just transmit what is interesting to you.  
-
       //readable over ethernet 
       gServer.print("cnt:");
       gServer.print(gPacket.count);
@@ -855,11 +859,10 @@ void sendPacket(){
       gServer.print(";pwm:");
       gServer.println(gPacket.stimulusStrength);  
 
-   //NOTE: this needs a lot of SRAM; if you dont need it comment it out, delete or just transmit what is interesting to you.  
 
     //readable over serial
     
-    Serial.print("cnt;");
+    Serial.print("cnt:");
     Serial.print(gPacket.count);
     Serial.print(";stmT:");
     Serial.print(gPacket.stimulusT);

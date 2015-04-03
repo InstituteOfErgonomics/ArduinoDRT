@@ -9,6 +9,7 @@
 //2.0      Jan, 2015    Michael Krause    part. refactored (const EEPROM and handleCommand()) & added measurement() for piezo & improved ISR
 //2.1      Feb, 2015    Michael Krause    improved pwm+/-; changed measurement from piezo to bemf 
 //2.2      Mar, 2015    Michael Krause    same readable statements in plain/ethernet/mega; added reset eeprom command for file number
+//2.3      Apr, 2015    Michael Krause    blink when start up (count root files); check limit on start up; use of SD buffer (O_CREAT | O_APPEND | O_WRITE) 
 //
 //VERSION const
 //------------------------------------------------------
@@ -59,7 +60,7 @@ const int DUO_COLOR_LED_GREEN = 1;
 const int DUO_COLOR_LED_RED = 2; 
 
 const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;buttonDownCount;pwm;";
-const String VERSION = "V2.2-plain";//plain, without Ethernet. version number is logged to result header
+const String VERSION = "V2.3-plain";//plain, without Ethernet. version number is logged to result header
 const String LINE = "----------";
 const String SEP = ";";
 
@@ -172,8 +173,8 @@ void sdInit(){
         gPacket.result = 'N'; // 'N' SD not available
         sendPacket();//send packet
         gSdCardAvailableF = false;
-        //blink two times red
-        duoLedBlink(2, 250, DUO_COLOR_LED_RED);
+        //blink three times red
+        duoLedBlink(3, 250, DUO_COLOR_LED_RED);
   }else{
     //Serial.println("initialization done.");
         gSdCardAvailableF = true;
@@ -212,6 +213,8 @@ void setup() {
   
   modEpromNumber();//fileNumber for logging is set to next hundred on power up
   
+  assertLimits();
+  
   if (gSdCardAvailableF){
     duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
   }
@@ -243,15 +246,37 @@ int getRootNumberOfFiles(){
          entry.close();
          break;
       }
+      if (numberOfFiles % 10 < 5){//do some blinking while count files
+        duoLed(DUO_COLOR_LED_GREEN);
+      }else{
+        duoLed(DUO_COLOR_LED_OFF);
+      }
       //Serial.println(entry.name());
       entry.close();
     }
    //root.rewindDirectory();
    root.close();
   
+  duoLed(DUO_COLOR_LED_OFF);
   return numberOfFiles;
 }
-
+//-------------------------------------------------------------------------------------
+void assertLimits(){
+   if (gCurFileNumber > 65000){//hang forever limit of unsigned int is 65535
+     Serial.println("E65000. Reset EEPROM.");
+     while(1){
+       //duoColorLed red blinking slow
+       duoLedBlink(1, 1000, DUO_COLOR_LED_RED);
+     }
+   }          
+   if (gRootNumberOfFiles > 499){//hang forever limit of files in root folder is 512;
+     Serial.println("E500. Empty SD card");
+     while(1){
+       //duoColorLed red blinking fast
+       duoLedBlink(1, 100, DUO_COLOR_LED_RED);
+     }
+   } 
+}
 //-------------------------------------------------------------------------------------
 void modEpromNumber(){//set the eprom to the next hundred number
 
@@ -275,6 +300,8 @@ void incCurFileNumber(){
 
   if (!gSdCardAvailableF) return;
 
+  assertLimits();
+  
   //load from eeprom
   int lowB  = EEPROM.read(EEPROM_FILENUM_L);  
   int highB = EEPROM.read(EEPROM_FILENUM_H);
@@ -287,21 +314,6 @@ void incCurFileNumber(){
   //save to eeprom
   EEPROM.write(EEPROM_FILENUM_L,  lowByte(gCurFileNumber)); 
   EEPROM.write(EEPROM_FILENUM_H, highByte(gCurFileNumber));
-
-   if (gCurFileNumber > 65000){//hang forever limit of unsigned int is 65535
-     Serial.println("E65000. Reset EEPROM.");
-     while(1){
-       //duoColorLed red blinking slow
-       duoLedBlink(1, 1000, DUO_COLOR_LED_RED);
-     }
-   }          
-   if (gRootNumberOfFiles > 500){//hang forever limit of files in root folder is 512;
-     Serial.println("E500. Empty SD card");
-     while(1){
-       //duoColorLed red blinking
-       duoLedBlink(1, 250, DUO_COLOR_LED_RED);
-     }
-   } 
 }
 //-------------------------------------------------------------------------------------
 void handleStartStopButton() {//called in every loop
@@ -564,7 +576,9 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
 
   char fileName[16];//actual file for saving
   sprintf(fileName, "%08d.txt", gCurFileNumber);
-  file = SD.open(fileName, FILE_WRITE);
+  //file = SD.open(fileName, FILE_WRITE);
+  file = SD.open(fileName, O_CREAT | O_APPEND | O_WRITE); //better
+  
   
   //Serial.println(actFileName);
   // if the file opened okay, write to it:
@@ -601,7 +615,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
         file.println(gPacket.stimulusStrength);
       }  
   
-    file.close();
+    file.close();//this also flush the write buffer
 
   } else {
     // if the file didn't open, print an error:
@@ -640,14 +654,16 @@ unsigned long setStimulus(byte value){
 }
 //-------------------------------------------------------------------------------------
 void startExp(){
-
+    Serial.println("1");
     gExpRunningF = true;
 
     gRtSum=0; //reset sum
             
     incCurFileNumber(); //set global file number to a new value
+    Serial.println("2");
 
     writeHeader();//write header to SD file
+    Serial.println("3");
     
     digitalWrite(EXP_RUNNING_LED_PIN,HIGH);//led on
     
@@ -664,9 +680,11 @@ void startExp(){
     //gPacket.stimulusT = 0;
     gPacket.soaNext = getRandomStimulusOnset();
     
+    Serial.println("4");
     gPacket.result = '#'; // '#' start of experiment    
     sendPacket();//send packet
     
+    Serial.println("5");
     //now we set count to 1 after '#' packet is sent, so '#' gets count 0
     gPacket.count = 1; 
     

@@ -10,6 +10,7 @@
 //2.1      Feb, 2015    Michael Krause    improved pwm+/-; changed measurement from piezo to bemf 
 //2.2      Mar, 2015    Michael Krause    same readable statements in plain/ethernet/mega; added reset eeprom command for file number
 //2.3      Apr, 2015    Michael Krause    blink when start up (count root files); check limit on start up; use of SD buffer (O_CREAT | O_APPEND | O_WRITE) 
+//2.3.1    Apr, 2015    Michael Krause    removed some aacidental debug statements
 //
 //VERSION const
 //------------------------------------------------------
@@ -654,16 +655,13 @@ unsigned long setStimulus(byte value){
 }
 //-------------------------------------------------------------------------------------
 void startExp(){
-    Serial.println("1");
     gExpRunningF = true;
 
     gRtSum=0; //reset sum
             
     incCurFileNumber(); //set global file number to a new value
-    Serial.println("2");
 
     writeHeader();//write header to SD file
-    Serial.println("3");
     
     digitalWrite(EXP_RUNNING_LED_PIN,HIGH);//led on
     
@@ -680,11 +678,9 @@ void startExp(){
     //gPacket.stimulusT = 0;
     gPacket.soaNext = getRandomStimulusOnset();
     
-    Serial.println("4");
     gPacket.result = '#'; // '#' start of experiment    
     sendPacket();//send packet
     
-    Serial.println("5");
     //now we set count to 1 after '#' packet is sent, so '#' gets count 0
     gPacket.count = 1; 
     

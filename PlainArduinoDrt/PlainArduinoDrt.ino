@@ -11,6 +11,7 @@
 //2.2      Mar, 2015    Michael Krause    same readable statements in plain/ethernet/mega; added reset eeprom command for file number
 //2.3      Apr, 2015    Michael Krause    blink when start up (count root files); check limit on start up; use of SD buffer (O_CREAT | O_APPEND | O_WRITE) 
 //2.3.1    Apr, 2015    Michael Krause    removed some aacidental debug statements
+//2.3.2    Apr, 2015    Michael Krause    added experimental empiric baseline prediction for TDRT via BEMF measurement
 //
 //VERSION const
 //------------------------------------------------------
@@ -895,8 +896,8 @@ void measurement(){
     const int REPEATED_MEASUREMENT = 10;
     long int embf_00[REPEATED_MEASUREMENT];//measurement of lag time until motor is moving and generates little bit embf
     long int embf_01[REPEATED_MEASUREMENT];//measurement until embf is raised ~0.1V
-    long int embf_02[REPEATED_MEASUREMENT];//measurement until embf is raised ~0.2V
-    long int embf_03[REPEATED_MEASUREMENT];//measurement until embf is raised ~0.3V
+    //long int embf_02[REPEATED_MEASUREMENT];//measurement until embf is raised ~0.2V
+    //long int embf_03[REPEATED_MEASUREMENT];//measurement until embf is raised ~0.3V
     
     ADCSRA = ADCSRA & 0b11111000 | 0x04;//setting adc prescaler to 16 => adc sampling > ~60kHz
     
@@ -906,8 +907,8 @@ void measurement(){
       for(int i = 0; i<REPEATED_MEASUREMENT;i++){
        embf_00[i] = ERR;
        embf_01[i] = ERR;
-       embf_02[i] = ERR;
-       embf_03[i] = ERR;
+       //embf_02[i] = ERR;
+       //embf_03[i] = ERR;
       }    
     
     
@@ -926,8 +927,8 @@ void measurement(){
       
       boolean embf00 = false;
       boolean embf01 = false;
-      boolean embf02 = false;
-      boolean embf03 = false;
+      //boolean embf02 = false;
+      //boolean embf03 = false;
       
       unsigned long startMeasurementT =  micros();
       unsigned long nowT;
@@ -952,6 +953,7 @@ void measurement(){
           embf_01[i] = nowT - startMeasurementT;
           embf01 = true;//set flag we have this value
         }
+        /*
         if ((analogIn < 980)&& (!embf02)){
           embf_02[i] = nowT - startMeasurementT;
           embf02 = true;//set flag we have this value
@@ -960,6 +962,7 @@ void measurement(){
           embf_03[i] = nowT - startMeasurementT;
           embf03 = true;//set flag we have this value
         }
+        */
    
         
         if ((nowT - startMeasurementT) > 500000){break;}//measure for 500 000 uSec
@@ -969,14 +972,20 @@ void measurement(){
       Serial.println("]");
       Serial.println("Medians[uS]:");
       Serial.print("lag: ");
-      median(embf_00, REPEATED_MEASUREMENT); 
+      long lag = median(embf_00, REPEATED_MEASUREMENT); //first movement detected
       Serial.print("0.1V: ");
-      median(embf_01, REPEATED_MEASUREMENT); 
+      long more = median(embf_01, REPEATED_MEASUREMENT); //little bit more movement detected
+      
+      long empiric = 233 + lag/1000 + 2 * (more - lag)/1000;
+      Serial.print("empiric prediction of baseline RT [ms]: ");
+      Serial.println(empiric);
+      
+     /* 
       Serial.print("0.2V: ");
       median(embf_02, REPEATED_MEASUREMENT); 
       Serial.print("0.3V: ");
       median(embf_03, REPEATED_MEASUREMENT); 
-          
+       */   
     
     digitalWrite(STIMULUS_LED_PIN,LOW);//switch off
 }

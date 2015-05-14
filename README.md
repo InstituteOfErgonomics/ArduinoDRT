@@ -31,3 +31,7 @@ Just one note: Please report bugs via the github repositories or mail to krause@
 If you connect wires and equipment to a subject, please do it with caution and obey e.g., electric safety.
 
 If setups are used while driving, special care must be taken. E.g. no cables or parts should interfere with the safe driving task. Think about what can fail while preparing the experiment (something gets loose, gets stuck to other parts,...).
+
+
+--------
+[![DOI](https://zenodo.org/badge/12944/InstituteOfErgonomics/ArduinoDRT.svg)](http://dx.doi.org/10.5281/zenodo.17611)

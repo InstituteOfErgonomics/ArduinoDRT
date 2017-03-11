@@ -2,7 +2,7 @@
 //Revision History 'Arduino-DRT-Plain'
 //------------------------------------------------------
 //Version  Date		Author		  Mod
-//1        Mar, 2014	Michael Krause	  initial
+//1        Mar, 2014	  Michael Krause	  initial
 //1.1      Mai, 2014    Michael Krause    gRootNumberOfFiles++ bug
 //1.2      Aug, 2014    Michael Krause    meanRt and hitRate
 //1.3      Nov, 2014    Michael Krause    shortened error messages, this removes non logging on SDcard bug. Important note: SRAM (string const, etc) was full, 1.2.1 sketch was compiled without error but failed during operation 
@@ -12,8 +12,9 @@
 //2.3      Apr, 2015    Michael Krause    blink when start up (count root files); check limit on start up; use of SD buffer (O_CREAT | O_APPEND | O_WRITE) 
 //2.3.1    Apr, 2015    Michael Krause    removed some aacidental debug statements
 //2.3.2    Apr, 2015    Michael Krause    added experimental empiric baseline prediction for TDRT via BEMF measurement
+//2.4      Mar, 2017    Michael Krause    new libraries in Arduino IDE 1.8.1 need more space => cleanup; tried to save RAM; removed bug in counting files; moved loop() and setup() to end of file
 //
-//VERSION const
+//reminder: increment VERSION const (below), when something changes
 //------------------------------------------------------
 /*
   GPL due to the use of SD libs.
@@ -61,8 +62,7 @@ const int DUO_COLOR_LED_OFF = 0;
 const int DUO_COLOR_LED_GREEN = 1; 
 const int DUO_COLOR_LED_RED = 2; 
 
-const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;buttonDownCount;pwm;";
-const String VERSION = "V2.3-plain";//plain, without Ethernet. version number is logged to result header
+const String VERSION = "V2.4-plain";//plain, without Ethernet. version number is logged to result header
 const String LINE = "----------";
 const String SEP = ";";
 
@@ -184,81 +184,34 @@ void sdInit(){
        //duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green
   }  
 }
-//---------------------------------------------------------------------------
-void setup() {
-  Serial.begin(115200);  
-  pinMode(REACT_BUTTON_PIN, INPUT); 
-  pinMode(START_STOP_BUTTON_PIN, INPUT); 
-  pinMode(STIMULUS_LED_PIN, OUTPUT); 
-  pinMode(EXP_RUNNING_LED_PIN, OUTPUT);
-  pinMode(BUTTON_CLOSED_LED_PIN, OUTPUT); 
-  pinMode(SD_CARD_LED_PIN_L, OUTPUT); 
-  pinMode(SD_CARD_LED_PIN_H, OUTPUT); 
 
-  pinMode(SD_CARD_CS_PIN, OUTPUT);
-
-
-  //init gButtonState global var
-  gButtonState = digitalRead(REACT_BUTTON_PIN);
-  
-  digitalWrite(REACT_BUTTON_PIN, HIGH); // pullUp on  
-  attachInterrupt(0, buttonISR, CHANGE);
-
-  digitalWrite(START_STOP_BUTTON_PIN, HIGH); // pullUp on  
-
-  //reset packet 
-  memset((byte*)gpPacket,0, sizeof(sDrtPacket));
-
-  sdInit();
-  
-  gRootNumberOfFiles = getRootNumberOfFiles();//we need this later to assure that we are not over the limit of 512; to seek the directory before every experiment need to much time
-  
-  modEpromNumber();//fileNumber for logging is set to next hundred on power up
-  
-  assertLimits();
-  
-  if (gSdCardAvailableF){
-    duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
-  }
-  else{
-    //while(1); //hang forever if you dont want that someone can start without a SD card
-  } 
-
-  //load PWM signalStrength from EEPROM 
-  gStimulusStrength = EEPROM.read(EEPROM_STIMULUS_PWM);
-  if (gStimulusStrength == 0){//if 0 set to 255, 0 is likely due to first use or clear of EEPROM
-    gStimulusStrength = 255;
-    EEPROM.write(EEPROM_STIMULUS_PWM, gStimulusStrength);
-  }
-  
-   //TCCR1B = TCCR1B & 0b11111000 | 0x01;//setting timer1 divisor to 1 => 31250Hz on Pin 9 & 10 for Arduino >>Uno<< so we can use TI DRV2603 & LRA  
-
-}
 //-------------------------------------------------------------------------------------
 int getRootNumberOfFiles(){
   //get number of fles in root--------
   int numberOfFiles = 0;
     
     File root = SD.open("/");
+    //Serial.println(root);
     root.seek(0);
-    while(true){
+    
+    File entry = root.openNextFile();
+    
+    while(entry){
       numberOfFiles++;
-      File entry = root.openNextFile();
-      if (!entry) {
-         entry.close();
-         break;
-      }
-      if (numberOfFiles % 10 < 5){//do some blinking while count files
+      //Serial.println(entry.name());
+      entry.close();
+      entry = root.openNextFile();
+
+      if (numberOfFiles % 10 < 5){//do some blinking while counting files
         duoLed(DUO_COLOR_LED_GREEN);
       }else{
         duoLed(DUO_COLOR_LED_OFF);
       }
-      //Serial.println(entry.name());
-      entry.close();
     }
+    
    //root.rewindDirectory();
    root.close();
-  
+     
   duoLed(DUO_COLOR_LED_OFF);
   return numberOfFiles;
 }
@@ -441,38 +394,6 @@ void setPWM(byte pwm){
   }
 }
 //-------------------------------------------------------------------------------------
-void loop() {
-
-   //listen on serial line ------------------------------
-  int inByte = 0; //reset in every loop
-  if (Serial.available() > 0) inByte = Serial.read();//read in
-  
-  handleCommand(inByte);
-
-  handleStartStopButton();
-
- //continiously refresh buttonState & LED
-  gButtonState = digitalRead(REACT_BUTTON_PIN);
-  digitalWrite(BUTTON_CLOSED_LED_PIN,!gButtonState); 
-
-
-  if (gExpRunningF){
-    handleDRT();
-  }else{
-    unsigned long now = millis();//millis not micros!
-    static unsigned long last;
-    if ((now - last) > 1000){ //if expriment not running, send every second a "R" ready packet
-      last = now;
-        //reset packet 
-        memset((byte*)gpPacket,0, sizeof(sDrtPacket));
-        gPacket.result = 'R'; // 'R' Ready to start
-        gPacket.fileNumber = gCurFileNumber;
-        sendPacket();//send empty packet as ready message
-    }
-  } 
-
-}
-//-------------------------------------------------------------------------------------
 /*
 void sendCardDataLastFile(){
   if (!gSdCardAvailableF){
@@ -576,7 +497,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
   
   if (!gSdCardAvailableF) return;   
 
-  char fileName[16];//actual file for saving
+  char fileName[13];//actual file for saving
   sprintf(fileName, "%08d.txt", gCurFileNumber);
   //file = SD.open(fileName, FILE_WRITE);
   file = SD.open(fileName, O_CREAT | O_APPEND | O_WRITE); //better
@@ -586,7 +507,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
   // if the file opened okay, write to it:
   if (file) {
       if (writeHeader){//write header
-        file.println(HEADER+VERSION);   
+        file.println("count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;buttonDownCount;pwm;"+VERSION);   
       }
       else{//write data
         //Serial.println("logging");  
@@ -1045,6 +966,88 @@ int discardErrors(long int *array, int length){//adjust length so errors '-1' in
 
   return length - countErrors;//return adjusted length
   
+}
+//---------------------------------------------------------------------------
+void setup() {
+  Serial.begin(115200);  
+  pinMode(REACT_BUTTON_PIN, INPUT); 
+  pinMode(START_STOP_BUTTON_PIN, INPUT); 
+  pinMode(STIMULUS_LED_PIN, OUTPUT); 
+  pinMode(EXP_RUNNING_LED_PIN, OUTPUT);
+  pinMode(BUTTON_CLOSED_LED_PIN, OUTPUT); 
+  pinMode(SD_CARD_LED_PIN_L, OUTPUT); 
+  pinMode(SD_CARD_LED_PIN_H, OUTPUT); 
+
+  pinMode(SD_CARD_CS_PIN, OUTPUT);
+
+
+  //init gButtonState global var
+  gButtonState = digitalRead(REACT_BUTTON_PIN);
+  
+  digitalWrite(REACT_BUTTON_PIN, HIGH); // pullUp on  
+  attachInterrupt(0, buttonISR, CHANGE);
+
+  digitalWrite(START_STOP_BUTTON_PIN, HIGH); // pullUp on  
+
+  //reset packet 
+  memset((byte*)gpPacket,0, sizeof(sDrtPacket));
+
+  sdInit();
+  
+  gRootNumberOfFiles = getRootNumberOfFiles();//we need this later to assure that we are not over the limit of 512; to seek the directory before every experiment need to much time
+  
+  modEpromNumber();//fileNumber for logging is set to next hundred on power up
+  
+  assertLimits();
+  
+  if (gSdCardAvailableF){
+    duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
+  }
+  else{
+    //while(1); //hang forever if you dont want that someone can start without a SD card
+  } 
+
+  //load PWM signalStrength from EEPROM 
+  gStimulusStrength = EEPROM.read(EEPROM_STIMULUS_PWM);
+  if (gStimulusStrength == 0){//if 0 set to 255, 0 is likely due to first use or clear of EEPROM
+    gStimulusStrength = 255;
+    EEPROM.write(EEPROM_STIMULUS_PWM, gStimulusStrength);
+  }
+  
+   //TCCR1B = TCCR1B & 0b11111000 | 0x01;//setting timer1 divisor to 1 => 31250Hz PWM on Pin 9 (& 10) for Arduino >>Uno<< so we can use driver chip TI DRV2603 & LRA vibrators  
+
+}
+//-------------------------------------------------------------------------------------
+void loop() {
+
+   //listen on serial line ------------------------------
+  int inByte = 0; //reset in every loop
+  if (Serial.available() > 0) inByte = Serial.read();//read in
+  
+  handleCommand(inByte);
+
+  handleStartStopButton();
+
+ //continiously refresh buttonState & LED
+  gButtonState = digitalRead(REACT_BUTTON_PIN);
+  digitalWrite(BUTTON_CLOSED_LED_PIN,!gButtonState); 
+
+
+  if (gExpRunningF){
+    handleDRT();
+  }else{
+    unsigned long now = millis();//millis not micros!
+    static unsigned long last;
+    if ((now - last) > 1000){ //if expriment not running, send every second a "R" ready packet
+      last = now;
+        //reset packet 
+        memset((byte*)gpPacket,0, sizeof(sDrtPacket));
+        gPacket.result = 'R'; // 'R' Ready to start
+        gPacket.fileNumber = gCurFileNumber;
+        sendPacket();//send empty packet as ready message
+    }
+  } 
+
 }
 //-------------------------------------------------------------------------------------
 

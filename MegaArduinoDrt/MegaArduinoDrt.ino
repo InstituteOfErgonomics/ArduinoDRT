@@ -10,8 +10,10 @@
 //2.1      Feb, 2015    Michael Krause    improved pwm+/-; 
 //2.2      Mar, 2015    Michael Krause    same readable statements in plain/ethernet/mega; added reset eeprom command for file number
 //2.3      Apr, 2015    Michael Krause    blink when start up (count root files); check limit on start up; use of SD buffer (O_CREAT | O_APPEND | O_WRITE) 
+//2.4      Mar, 2017    Michael Krause    (not tested) new libraries in Arduino IDE 1.8.1 need more space => cleanup; tried to save RAM; removed bug in counting files; moved loop() and setup() to end of file
 //
-//VERSION const
+//reminder: increment VERSION const (below), when something changes
+//          change IP adress in setup().
 //------------------------------------------------------
 /*     
   GPL due to the use of SD libs.
@@ -77,11 +79,7 @@ const int DUO_COLOR_LED_GREEN = 1;
 const int DUO_COLOR_LED_RED = 2; 
 
 
-
-
-const String HEADER = "count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;unixTimestamp;stimulusMultiX;nextStimulusMultiX;";
-const String VERSION = "V2.3-m";//with 'm'ega. version number is logged to result header
-const String LINE = "----------";
+const String VERSION = "V2.4-m";//with 'm'ega. version number is logged to result header
 const String SEP = ";";
 
 const unsigned long CHEAT = 100000;//lower 100000 micro seconds = cheat
@@ -116,15 +114,6 @@ byte gStimulsOnF = false;//is stimuls on
 byte gStimulusStrength=255;//PWM stimulus strength
 unsigned long gRtSum=0;//sum of all reaction times during one experiment, to calculate meanRt
 int gButtonState;//button state of reaction button
-
-  // Enter a MAC address for your controller below.
-  // Newer Ethernet shields have a MAC address printed on a sticker on the shield
-  byte gMac[] = {0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
-  IPAddress gIp(192,168,1,111);
-  // the router's gateway address:
-  //byte gGateway[] = { 192, 168, 2, 1 };
-  // the subnet:
-  //byte gSubnet[] = { 255, 255, 255, 0 };
   
   EthernetServer gServer(7008);//enter PORT number
   EthernetClient gClient;
@@ -245,89 +234,7 @@ void multiplexTest(){ //test stimulus multiplexing. switch every LED on for 1 se
       digitalWrite(STIMULUS_LED_PIN, LOW); // switch stimulus off
   }
 }
-//---------------------------------------------------------------------------
-void setup() {
-  Serial.begin(115200);  
-  pinMode(REACT_BUTTON_PIN, INPUT); 
-  pinMode(START_STOP_BUTTON_PIN, INPUT); 
-  pinMode(STIMULUS_LED_PIN, OUTPUT); 
-  pinMode(EXP_RUNNING_LED_PIN, OUTPUT);
-  pinMode(BUTTON_CLOSED_LED_PIN, OUTPUT); 
-  pinMode(SD_CARD_LED_PIN_L, OUTPUT); 
-  pinMode(SD_CARD_LED_PIN_H, OUTPUT); 
-  
-  
-  pinMode(STIMULUS_MULTIPLEXER_0,OUTPUT);
-  pinMode(STIMULUS_MULTIPLEXER_1,OUTPUT);
-  pinMode(STIMULUS_MULTIPLEXER_2,OUTPUT);
-  
-  multiplexTest();//switch every LED on for 0.5 seconds
-  
-  pinMode(SD_CARD_CS_PIN, OUTPUT);
-  //!!! disable SD card SPI while starting ethernet
-  digitalWrite(SD_CARD_CS_PIN, HIGH);
-  
-  digitalWrite(REACT_BUTTON_PIN, HIGH); // pullUp on  
-  attachInterrupt(0, buttonISR, CHANGE);
 
-  digitalWrite(START_STOP_BUTTON_PIN, HIGH); // pullUp on  
-
-  memset((byte*)gpPacket,0, sizeof(sDrtPacket));//reset packet
-  
- // start Ethernet and UDP
-  if (Ethernet.begin(gMac) == 0) {
-    Serial.println("Failed to configure Ethernet using DHCP");
-    // no point in carrying on, so do nothing forevermore:
-    for(;;)
-      ;
-  }else{
-    printIp();//show Ip over serial
-  }
-  gUdp.begin(gLocalPort);//for ntp
-  
-  gServer.begin();
-  
-  unsigned long ntpTimestamp = getNtpTimestamp(); 
-  if (ntpTimestamp > 0){
-    Serial.println("Getting timestamp over NTP successfull. Thus setting RTC to: ");
-    time_t now_t = ntpTimestamp;
-    printTime(now_t); //show time over serial    
-    RTC.set(now_t);//set RTC to now
-    Serial.println("Read back time from RTC:");     
-  }else{
-    Serial.println("Failed to get NTP timestamp using timestamp from RTC:");
-  }
-  time_t now_t = RTC.get();
-  printTime(now_t); //show time over serial
-  
-  //!!! disable w5100 SPI while starting SD
-  digitalWrite(10, HIGH);
-  
-    // set date time callback function
-  SdFile::dateTimeCallback(dateTime); 
-  
-  sdInit();
-
-  gRootNumberOfFiles = getRootNumberOfFiles();//we need this later to assure that we are not over the limit of 512; to seek the directory before every experiment need to much time
-  
-  modEpromNumber();//fileNumber for logging is set to next hundred on power up
-  
-  assertLimits();
-    
-  if (gSdCardAvailableF){
-    duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
-  }
-  else{
-    //while(1); //hang forever if you dont want that someone can start without a SD card
-  }  
-  
-  //load PWM signalStrength from EEPROM 
-  gStimulusStrength = EEPROM.read(EEPROM_STIMULUS_PWM);
-  if (gStimulusStrength == 0){//if 0 set to 255, 0 is likely due to first use or clear of EEPROM
-    gStimulusStrength = 255;
-    EEPROM.write(EEPROM_STIMULUS_PWM, gStimulusStrength);
-  }
-}
 //-------------------------------------------------------------------------------------
 void printTime(unsigned long t){
      Serial.print("now: ");
@@ -412,25 +319,27 @@ int getRootNumberOfFiles(){
   int numberOfFiles = 0;
     
     File root = SD.open("/");
+    //Serial.println(root);
     root.seek(0);
-    while(true){
+    
+    File entry = root.openNextFile();
+    
+    while(entry){
       numberOfFiles++;
-      File entry = root.openNextFile();
-      if (!entry) {
-         entry.close();
-         break;
-      }
-      if (numberOfFiles % 10 < 5){//do some blinking while count files
+      //Serial.println(entry.name());
+      entry.close();
+      entry = root.openNextFile();
+
+      if (numberOfFiles % 10 < 5){//do some blinking while counting files
         duoLed(DUO_COLOR_LED_GREEN);
       }else{
         duoLed(DUO_COLOR_LED_OFF);
       }
-      //Serial.println(entry.name());
-      entry.close();
     }
+    
    //root.rewindDirectory();
    root.close();
-  
+     
   duoLed(DUO_COLOR_LED_OFF);
   return numberOfFiles;
 }
@@ -619,52 +528,7 @@ void setPWM(byte pwm){
     if (gStimulsOnF) setStimulus(gStimulusStrength);//if stimulus is on, refresh it with new value
   }
 }
-//-------------------------------------------------------------------------------------
-void loop() {
 
-  int inByte = 0; //reset in every loop
-        
-    if ((gClient) && (!gClient.connected())) {//stop and null if disconnected
-      gClient.stop();
-    }
-    
-    if ((gClient) && (gClient.available())){inByte = gClient.read();}
-    
-   //listen on serial line ------------------------------
-  if (Serial.available() > 0) inByte = Serial.read();//read in
-
-  handleCommand(inByte);  
-    
-  handleStartStopButton();
-
- //continiously refresh buttonState & LED
-  gButtonState = digitalRead(REACT_BUTTON_PIN);
-  digitalWrite(BUTTON_CLOSED_LED_PIN,!gButtonState); 
-
-
-  if (gExpRunningF){
-    handleDRT();
-  }else{
-    
-    // listen for incoming client; this needs some uSecs so we do it only if experiment is not running or in handleDRT() when we are far away (before and after) a stimulus
-    gClient = gServer.available();
-
-    
-    unsigned long now = millis();//millis not micros!
-    static unsigned long last;
-    if ((now - last) > 1000){ //if expriment not running, send every second a "R" ready packet
-      last = now;
-        //reset packet 
-        memset((byte*)gpPacket,0, sizeof(sDrtPacket));
-        gPacket.result = 'R'; // 'R' Ready to start
-        gPacket.fileNumber = gCurFileNumber;
-        sendPacket();//send empty packet as ready message
-    }
-    
-    
-  } 
-  
-}
 //-------------------------------------------------------------------------------------
 /*
 void sendCardDataLastFile(){
@@ -780,7 +644,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
   
   if (!gSdCardAvailableF) return;   
 
-  char fileName[16];//actual file for saving
+  char fileName[13];//actual file for saving
   sprintf(fileName, "%08d.txt", gCurFileNumber);
   //file = SD.open(fileName, FILE_WRITE);
   file = SD.open(fileName, O_CREAT | O_APPEND | O_WRITE); //better
@@ -789,7 +653,7 @@ void writeHeaderOrData(byte writeHeader){//true: writeHeader, false: data
   // if the file opened okay, write to it:
   if (file) {
       if (writeHeader){//write header
-        file.println(HEADER+VERSION); 
+        file.println("count;stimulusT;onsetDelay;soa;soaNext;rt;result;marker;edges;edgesDebounced;hold;btnDownCount;pwm;unixTimestamp;stimulusMultiX;nextStimulusMultiX;"+VERSION); 
       }
       else{//write data
         //Serial.println("logging");
@@ -1182,6 +1046,135 @@ void buttonISR(){
 
     } //expRunning
 }
-//-------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------
+void setup() {
+  Serial.begin(115200);  
+  pinMode(REACT_BUTTON_PIN, INPUT); 
+  pinMode(START_STOP_BUTTON_PIN, INPUT); 
+  pinMode(STIMULUS_LED_PIN, OUTPUT); 
+  pinMode(EXP_RUNNING_LED_PIN, OUTPUT);
+  pinMode(BUTTON_CLOSED_LED_PIN, OUTPUT); 
+  pinMode(SD_CARD_LED_PIN_L, OUTPUT); 
+  pinMode(SD_CARD_LED_PIN_H, OUTPUT); 
+  
+  
+  pinMode(STIMULUS_MULTIPLEXER_0,OUTPUT);
+  pinMode(STIMULUS_MULTIPLEXER_1,OUTPUT);
+  pinMode(STIMULUS_MULTIPLEXER_2,OUTPUT);
+  
+  multiplexTest();//switch every LED on for 0.5 seconds
+  
+  pinMode(SD_CARD_CS_PIN, OUTPUT);
+  //!!! disable SD card SPI while starting ethernet
+  digitalWrite(SD_CARD_CS_PIN, HIGH);
+  
+  digitalWrite(REACT_BUTTON_PIN, HIGH); // pullUp on  
+  attachInterrupt(0, buttonISR, CHANGE);
 
+  digitalWrite(START_STOP_BUTTON_PIN, HIGH); // pullUp on  
+
+  memset((byte*)gpPacket,0, sizeof(sDrtPacket));//reset packet
+  
+ // start Ethernet and UDP
+  byte mac[] = {0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
+  if (Ethernet.begin(mac) == 0) {
+    Serial.println("Failed to configure Ethernet using DHCP");
+    // no point in carrying on, so do nothing forevermore:
+    for(;;)
+      ;
+  }else{
+    printIp();//show Ip over serial
+  }
+  gUdp.begin(gLocalPort);//for ntp
+  
+  gServer.begin();
+  
+  unsigned long ntpTimestamp = getNtpTimestamp(); 
+  if (ntpTimestamp > 0){
+    Serial.println("Getting timestamp over NTP successfull. Thus setting RTC to: ");
+    time_t now_t = ntpTimestamp;
+    printTime(now_t); //show time over serial    
+    RTC.set(now_t);//set RTC to now
+    Serial.println("Read back time from RTC:");     
+  }else{
+    Serial.println("Failed to get NTP timestamp using timestamp from RTC:");
+  }
+  time_t now_t = RTC.get();
+  printTime(now_t); //show time over serial
+  
+  //!!! disable w5100 SPI while starting SD
+  digitalWrite(10, HIGH);
+  
+    // set date time callback function
+  SdFile::dateTimeCallback(dateTime); 
+  
+  sdInit();
+
+  gRootNumberOfFiles = getRootNumberOfFiles();//we need this later to assure that we are not over the limit of 512; to seek the directory before every experiment need to much time
+  
+  modEpromNumber();//fileNumber for logging is set to next hundred on power up
+  
+  assertLimits();
+    
+  if (gSdCardAvailableF){
+    duoLed(DUO_COLOR_LED_GREEN);//set duoColorLed to green, turn it on here after, all setup is done
+  }
+  else{
+    //while(1); //hang forever if you dont want that someone can start without a SD card
+  }  
+  
+  //load PWM signalStrength from EEPROM 
+  gStimulusStrength = EEPROM.read(EEPROM_STIMULUS_PWM);
+  if (gStimulusStrength == 0){//if 0 set to 255, 0 is likely due to first use or clear of EEPROM
+    gStimulusStrength = 255;
+    EEPROM.write(EEPROM_STIMULUS_PWM, gStimulusStrength);
+  }
+}
+//-------------------------------------------------------------------------------------
+void loop() {
+
+  int inByte = 0; //reset in every loop
+        
+    if ((gClient) && (!gClient.connected())) {//stop and null if disconnected
+      gClient.stop();
+    }
+    
+    if ((gClient) && (gClient.available())){inByte = gClient.read();}
+    
+   //listen on serial line ------------------------------
+  if (Serial.available() > 0) inByte = Serial.read();//read in
+
+  handleCommand(inByte);  
+    
+  handleStartStopButton();
+
+ //continiously refresh buttonState & LED
+  gButtonState = digitalRead(REACT_BUTTON_PIN);
+  digitalWrite(BUTTON_CLOSED_LED_PIN,!gButtonState); 
+
+
+  if (gExpRunningF){
+    handleDRT();
+  }else{
+    
+    // listen for incoming client; this needs some uSecs so we do it only if experiment is not running or in handleDRT() when we are far away (before and after) a stimulus
+    gClient = gServer.available();
+
+    
+    unsigned long now = millis();//millis not micros!
+    static unsigned long last;
+    if ((now - last) > 1000){ //if expriment not running, send every second a "R" ready packet
+      last = now;
+        //reset packet 
+        memset((byte*)gpPacket,0, sizeof(sDrtPacket));
+        gPacket.result = 'R'; // 'R' Ready to start
+        gPacket.fileNumber = gCurFileNumber;
+        sendPacket();//send empty packet as ready message
+    }
+    
+    
+  } 
+  
+}
+//-------------------------------------------------------------------------------------
 
